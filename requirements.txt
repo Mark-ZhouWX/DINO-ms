@@ -1,0 +1,4 @@
+mindspore>=1.7.0
+opencv-python
+pycocotools
+tqdm
