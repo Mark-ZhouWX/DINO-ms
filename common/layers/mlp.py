@@ -2,8 +2,9 @@ from mindspore import nn, Tensor, ops
 
 
 class MLP(nn.Cell):
-    """The implementation of simple multi-layer perceptron layer
-    without dropout and identity connection.
+    """
+    The implementation of simple multi-layer perceptron layer
+    without dropout and identity connection. Usually used as the head for box regression
 
     The feature process order follows `Linear -> ReLU -> Linear -> ReLU -> ...`.
 
@@ -18,7 +19,7 @@ class MLP(nn.Cell):
         super().__init__()
         self.num_layers = num_layers
         h = [hidden_dim] * (num_layers - 1)
-        self.layers = nn.CellList(nn.Dense(n, k) for n, k in zip([input_dim] + h, h + [output_dim]))
+        self.layers = nn.CellList(list(nn.Dense(n, k) for n, k in zip([input_dim] + h, h + [output_dim])))
 
     def construct(self, x):
         """Forward function of `MLP`.
@@ -36,23 +37,16 @@ class MLP(nn.Cell):
 
 class FFN(nn.Cell):
     """The implementation of feed-forward networks (FFNs)
-    with identity connection.
+    with identity connection. Usually used as the unit in transformer layer
 
     Args:
-        embed_dim (int): The feature dimension. Same as
-            `MultiheadAttention`. Defaults: 256.
-        feedforward_dim (int): The hidden dimension of FFNs.
-            Defaults: 1024.
-        output_dim (int): The output feature dimension of FFNs.
-            Default: None. If None, the `embed_dim` will be used.
-        num_fcs (int, optional): The number of fully-connected layers in
-            FFNs. Default: 2.
-        activation (nn.Module): The activation layer used in FFNs.
-            Default: nn.ReLU(inplace=True).
-        ffn_drop (float, optional): Probability of an element to be
-            zeroed in FFN. Default 0.0.
-        add_identity (bool, optional): Whether to add the
-            identity connection. Default: `True`.
+        embed_dim (int): The feature dimension. Same as `MultiheadAttention`. Defaults: 256.
+        feedforward_dim (int): The hidden dimension of FFNs. Defaults: 1024.
+        output_dim (int): The output feature dimension of FFNs. Default: None. If None, the `embed_dim` will be used.
+        num_fcs (int, optional): The number of fully-connected layers in FFNs. Default: 2.
+        activation (nn.Module): The activation layer used in FFNs. Default: nn.ReLU(inplace=True).
+        ffn_drop (float, optional): Probability of an element to be zeroed in FFN. Default 0.0.
+        add_identity (bool, optional): Whether to add the identity connection. Default: `True`.
     """
 
     def __init__(
@@ -80,19 +74,20 @@ class FFN(nn.Cell):
         for _ in range(num_fcs - 1):
             layers.append(
                 nn.SequentialCell(
-                    nn.Dense(in_channels, feedforward_dim, bias=fc_bias),
+                    nn.Dense(in_channels, feedforward_dim, has_bias=fc_bias),
                     self.activation,
-                    nn.Dropout(ffn_drop),
+                    nn.Dropout(1 - ffn_drop),
                 )
             )
             in_channels = feedforward_dim
-        layers.append(nn.Dense(feedforward_dim, output_dim, bias=fc_bias))
-        layers.append(nn.Dropout(ffn_drop))
+        layers.append(nn.Dense(feedforward_dim, output_dim, has_bias=fc_bias))
+        layers.append(nn.Dropout(1 - ffn_drop))
         self.layers = nn.SequentialCell(*layers)
         self.add_identity = add_identity
 
     def construct(self, x, identity=None) -> Tensor:
-        """Forward function of `FFN` with identity addition.
+        """
+        Defines the computation to be performed.
 
         Args:
             x (torch.Tensor): the input tensor used in `FFN` layers.

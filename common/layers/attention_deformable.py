@@ -5,7 +5,7 @@ from typing import Optional
 import mindspore as ms
 from mindspore import nn, ops, Tensor
 import mindspore.common.initializer as init
-
+import mindspore.numpy as ms_np
 
 def _is_power_of_2(n):
     if (not isinstance(n, int)) or (n < 0):
@@ -14,7 +14,8 @@ def _is_power_of_2(n):
 
 
 class MultiScaleDeformableAttention(nn.Cell):
-    """Multi-Scale Deformable Attention Module used in Deformable-DETR
+    """
+    Multi-Scale Deformable Attention Module used in Deformable-DETR
 
     `Deformable DETR: Deformable Transformers for End-to-End Object Detection.
     <https://arxiv.org/pdf/2010.04159.pdf>`_.
@@ -75,12 +76,13 @@ class MultiScaleDeformableAttention(nn.Cell):
         """
         pshape, dtype = self.sampling_offsets.weight.shape, self.sampling_offsets.weight.dtype
         self.sampling_offsets.weight.set_data(init.initializer('zeros', pshape, dtype))
-        thetas = ops.arange(self.num_heads, dtype=ms.float32) * (2.0 * math.pi / self.num_heads)
-        grid_init = ops.stack([thetas.cos(), thetas.sin()], -1)
-        grid_init = (
-            (grid_init / grid_init.abs().max(-1, keepdim=True)[0])
+        thetas = ops.arange(self.num_heads, dtype=ms.float32) * (2.0 * math.pi / self.num_heads)  # (num_head,)
+        grid_init = ops.stack([thetas.cos(), thetas.sin()], -1)  # (num_head, 2)
+        grid_init = ms_np.tile(
+            # (num_head, 1) -> (8, 1) -> (num_head, 2)
+            (grid_init / grid_init.abs().max(-1, keepdims=True)[0])
             .view(self.num_heads, 1, 1, 2)
-            .repeat(1, self.num_levels, self.num_points, 1)
+            , (1, self.num_levels, self.num_points, 1)
         )
         for i in range(self.num_points):
             grid_init[:, :, i, :] *= i + 1
@@ -120,7 +122,8 @@ class MultiScaleDeformableAttention(nn.Cell):
         **kwargs
     ) -> Tensor:
 
-        """Forward Function of MultiScaleDeformableAttention
+        """
+        Defines the computation to be performed.
 
         Args:
             query (torch.Tensor): Query embeddings with shape
@@ -167,7 +170,7 @@ class MultiScaleDeformableAttention(nn.Cell):
         value = self.value_proj(value)
         if key_padding_mask is not None:
             value = value.masked_fill(key_padding_mask[..., None], float(0))
-        value = value.view(bs, num_value, self.num_heads, -1)  # (bs, sum(hw), num_head, embed_dim//num_head)
+        value = value.view(bs, num_value, self.num_heads, -1)  # (bs, sum(hw), num_head, head_dim)
 
         sampling_offsets = self.sampling_offsets(query).view(
             bs, num_query, self.num_heads, self.num_levels, self.num_points, 2
@@ -176,7 +179,7 @@ class MultiScaleDeformableAttention(nn.Cell):
         attention_weights = self.attention_weights(query).view(
             bs, num_query, self.num_heads, self.num_levels * self.num_points
         )
-        attention_weights = attention_weights.softmax(-1)
+        attention_weights = ops.softmax(attention_weights, -1)  # (bs, sum(hw), num_head, num_level*num_point)
         attention_weights = attention_weights.view(bs, num_query, self.num_heads, self.num_levels, self.num_points)
 
         if reference_points.shape[-1] == 2:
@@ -184,7 +187,7 @@ class MultiScaleDeformableAttention(nn.Cell):
             sampling_locations = (
                 reference_points[:, :, None, :, None, :]
                 + sampling_offsets / offset_normalizer[None, None, None, :, None, :]
-            )  # (bs, num_query, num_heads, num_levels, num_points, 2)
+            )  # (bs, sum(hw), num_heads, num_levels, num_points, 2)
         elif reference_points.shape[-1] == 4:
             # modulate xy offset by hw
             sampling_locations = (
@@ -224,21 +227,24 @@ def multi_scale_deformable_attn_pytorch(
 
     bs, _, num_heads, head_embed_dims = value.shape  # embed_dim is the one for head
     _, num_queries, num_heads, num_levels, num_points, _ = sampling_locations.shape
-    value_list = value.split([H_ * W_ for H_, W_ in value_spatial_shapes], axis=1)
+    value_list = value.split([int(H_ * W_) for H_, W_ in value_spatial_shapes], axis=1)
     sampling_grids = 2 * sampling_locations - 1
     sampling_value_list = []
-    for level, (H_, W_) in enumerate(value_spatial_shapes):
+    value_spatial_shapes_np = value_spatial_shapes.asnumpy()
+    for level, (H_, W_) in enumerate(value_spatial_shapes_np):
+        # H_, W_ = int(H_), int(W_)
         # bs, H_*W_, num_heads, head_embed_dims ->
         # bs, H_*W_, num_heads*head_embed_dims ->
         # bs, num_heads*head_embed_dims, H_*W_ ->
         # bs*num_heads, head_embed_dims, H_, W_
         value_l_ = (
-            value_list[level].flatten(2).transpose(1, 2).reshape(bs * num_heads, head_embed_dims, H_, W_)
+            value_list[level].reshape(bs, int(H_ * W_), -1).transpose((0, 2, 1)).reshape(bs * num_heads, head_embed_dims, H_, W_)
         )
         # bs, num_queries, num_heads, num_points, 2 ->
         # bs, num_heads, num_queries, num_points, 2 ->
         # bs*num_heads, num_queries, num_points, 2
-        sampling_grid_l_ = sampling_grids[:, :, :, level].transpose(1, 2).flatten(0, 1)
+        sampling_grid_l_ = sampling_grids[:, :, :, level].transpose((0, 2, 1, 3, 4)).reshape(
+            bs * num_heads, num_queries, num_points, 2)
         # bs*num_heads, head_embed_dims, num_queries, num_points
         sampling_value_l_ = ops.grid_sample(
             value_l_, sampling_grid_l_, interpolation_mode="bilinear", padding_mode="zeros", align_corners=False
@@ -246,20 +252,20 @@ def multi_scale_deformable_attn_pytorch(
         sampling_value_list.append(sampling_value_l_)
     # (bs, num_queries, num_heads, num_levels, num_points) ->
     # (bs, num_heads, num_queries, num_levels, num_points) ->
-    # (bs, num_heads, 1, num_queries, num_levels*num_points)
-    attention_weights = attention_weights.transpose(1, 2).reshape(
+    # (bs*num_heads, 1, num_queries, num_levels*num_points)
+    attention_weights = attention_weights.transpose((0, 2, 1, 3, 4)).reshape(
         bs * num_heads, 1, num_queries, num_levels * num_points
     )
 
-    # (bs*num_heads, head_embed_dims, num_queries, num_layer, num_points) ->
-    # (bs*num_heads, head_embed_dims, num_queries, num_layer*num_points) ->
-    # (bs*num_heads, head_embed_dims, num_queries, num_layer*num_points) ->
+    # (bs*num_heads, head_embed_dims, num_queries, num_levels, num_points) ->
+    # (bs*num_heads, head_embed_dims, num_queries, num_levels*num_points) ->
+    # (bs*num_heads, head_embed_dims, num_queries, num_levels*num_points) ->
     # (bs*num_heads, head_embed_dims, num_queries) -> [aggregate among level and pts axis]
     # (bs, num_heads*head_embed_dims, num_queries)
     output = (
-        (ops.stack(sampling_value_list, axis=-2).flatten(-2) * attention_weights)
+        (ops.stack(sampling_value_list, axis=-2).reshape(bs * num_heads, head_embed_dims, num_queries, -1) * attention_weights)
         .sum(-1)
         .view(bs, num_heads * head_embed_dims, num_queries)
     )
     # (bs, num_queries, embed_dims)  embed_dims = num_heads*head_embed_dims
-    return output.transpose(1, 2).contiguous()
+    return output.transpose((0, 2, 1))

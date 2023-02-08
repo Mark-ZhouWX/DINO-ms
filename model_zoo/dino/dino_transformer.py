@@ -1,7 +1,10 @@
 import mindspore as ms
 from mindspore import nn, ops, Tensor
 import mindspore.common.initializer as init
+import mindspore.numpy as ms_np
 
+from common.layers.attention import MultiheadAttention
+from common.layers.attention_deformable import MultiScaleDeformableAttention
 from common.layers.mlp import FFN, MLP
 from common.layers.position_embedding import get_sine_pos_embed
 from common.layers.transformer import TransformerLayerSequence, BaseTransformerLayer
@@ -35,12 +38,13 @@ class DINOTransformer(nn.Cell):
 
         self.embed_dim = self.encoder.embed_dim
 
-        self.level_embeds = ms.Parameter(Tensor(self.num_feature_levels, self.embed_dim))
+        self.level_embeds = ms.Parameter(init.initializer(init.Uniform(), (self.num_feature_levels, self.embed_dim)))
+        # self.level_embeds = nn.Embedding(self.num_feature_levels, self.embed_dim)
         self.learnt_init_query = learnt_init_query
         if self.learnt_init_query:
             self.tgt_embed = nn.Embedding(self.two_stage_num_proposals, self.embed_dim)
         self.enc_output = nn.Dense(self.embed_dim, self.embed_dim)
-        self.enc_output_norm = nn.LayerNorm(self.embed_dim)
+        self.enc_output_norm = nn.LayerNorm((self.embed_dim,))
 
         self.init_weights()
 
@@ -73,9 +77,9 @@ class DINOTransformer(nn.Cell):
             spatial_shape = (h, w)
             spatial_shapes.append(spatial_shape)
 
-            feat = feat.flatten(2).transpose(1, 2)  # bs, hw, c
-            mask = mask.flatten(1)  # bs, hw
-            pos_embed = pos_embed.flatten(2).transpose(1, 2)  # bs, hw, c
+            feat = feat.view(bs, c, -1).transpose(0, 2, 1)  # bs, hw, c
+            mask = mask.view(bs, -1)  # bs, hw
+            pos_embed = pos_embed.view(bs, c, -1).transpose(0, 2, 1)  # bs, hw, c
             lvl_pos_embed = pos_embed + self.level_embeds[lvl].view(1, 1, -1)  # multi-scale embed
             lvl_pos_embed_flatten.append(lvl_pos_embed)
             feat_flatten.append(feat)
@@ -97,7 +101,7 @@ class DINOTransformer(nn.Cell):
             key=None,
             value=None,
             query_pos=lvl_pos_embed_flatten,
-            # to mask image input padding area
+            # to mask image input padding area·
             query_key_padding_mask=mask_flatten,
             # leave for deformable-attn
             spatial_shapes=spatial_shapes,
@@ -127,31 +131,34 @@ class DINOTransformer(nn.Cell):
         # print(enc_outputs_class.shape)
         # print(enc_outputs_class.max(-1)[0])
         # topk = 3
-        # TODO 此处应该把【0】去掉，待验证
-        topk_proposals = ops.topk(enc_outputs_class.max(-1)[0], topk, dim=1)[1]  # (bs, k) , k=num_query
+        # torch.max returns a tuple (value, index), mindspore.ops.max return a tensor (value)
+
+        topk_proposals = ops.topk(enc_outputs_class.max(-1), topk, dim=1)[1]  # (bs, k) , k=num_query
 
         # extract region proposal boxes
         topk_coords_unact = ops.gather_elements(
-            enc_outputs_coord_unact, 1, topk_proposals.unsqueeze(-1).repeat(1, 1, 4),
+            enc_outputs_coord_unact, 1, ms_np.tile(topk_proposals.unsqueeze(-1), (1, 1, 4)),
         )  # unsigmoided. (bs, k, 4)
-        reference_points = topk_coords_unact.detach().sigmoid()
+        reference_points = ops.stop_gradient(topk_coords_unact).sigmoid()
         if query_embed[1] is not None:
             reference_points = ops.cat([query_embed[1].sigmoid(), reference_points], 1)
         init_reference_out = reference_points
 
         # extract region features
+
         target_unact = ops.gather_elements(
-            output_memory, 1, topk_proposals.unsqueeze(-1).repeat(1, 1, output_memory.shape[-1])
+            output_memory, 1, ms_np.tile(topk_proposals.unsqueeze(-1), (1, 1, output_memory.shape[-1]))
         )
         if self.learnt_init_query:
             bs = multi_level_feats[0].shape[0]
-            target = self.tgt_embed.weight[None].repeat(bs, 1, 1)
+            target = ms_np.tile(self.tgt_embed.embedding_table[None], (bs, 1, 1))
         else:
-            target = target_unact.detach()
+            target = ops.stop_gradient(target_unact)
         if query_embed[0] is not None:
             target = ops.cat([query_embed[0], target], 1)
 
         # decoder
+        # (num_trans_layer, bs, num_query, embed_dim),   (num_trans_layer, bs, num_query, 4)
         inter_states, inter_references = self.decoder(
             query=target,  # (bs, sum(hw)+num_cdn, embed_dims) if dn training else None (bs, sum(hw), embed_dims)
             key=memory,  # bs, sum(hw), embed_dims
@@ -182,10 +189,10 @@ class DINOTransformer(nn.Cell):
             if p.dim() > 1:
                 p.set_data(init.initializer(init.XavierUniform(), p.shape, p.dtype))
         for m in self.cells():
-            # TODO to replace deformable attention with normal attention
             if isinstance(m, MultiScaleDeformableAttention):
                 m.init_weights()
-        self.level_embed.set_data(init.initializer(init.Uniform(), self.level_embeds.shape, self.level_embeds.dtype))
+        # p_shape, d_type = self.level_embeds.shape, self.level_embeds.dtype
+        # self.level_embeds.set_data(init.initializer(init.Uniform(), p_shape, d_type))
 
     def gen_encoder_output_proposals(self, memory, memory_padding_mask, spatial_shapes):
         """
@@ -197,26 +204,30 @@ class DINOTransformer(nn.Cell):
             Tensor[bs, sum(hw), c]: filtered memory
             Tensor[bs, sum(hw), 4]: filtered bbox proposals
         """
-        N, S, C = memory.shape
+        bs, sum_hw, embed_dim = memory.shape
         proposals = []
         _cur = 0  # start index of the ith layer
-        for lvl, (H, W) in enumerate(spatial_shapes):
-            mask_flatten_ = memory_padding_mask[:, _cur: (_cur + H * W)].view(N, H, W, 1)
-            valid_H = ops.sum(~mask_flatten_[:, :, 0, 0], 1)  # bs
-            valid_W = ops.sum(~mask_flatten_[:, 0, :, 0], 1)  # bs
+        spatial_shapes_np = spatial_shapes.asnumpy()
+        for lvl, (H, W) in enumerate(spatial_shapes_np):
+            mask_flatten_ = memory_padding_mask[:, _cur: (_cur + H * W)].view(bs, H, W, 1)
+            h_mask_not, w_mask_not = ~mask_flatten_[:, :, 0, 0], ~mask_flatten_[:, 0, :, 0]
+            if mask_flatten_.dtype != ms.float_:
+                h_mask_not = ops.cast(h_mask_not, ms.float32)
+                w_mask_not = ops.cast(w_mask_not, ms.float32)
+            valid_h = ops.sum(h_mask_not, 1)  # (bs,)
+            valid_w = ops.sum(w_mask_not, 1)  # (bs,)
 
             grid_y, grid_x = ops.meshgrid(
                 ops.linspace(Tensor(0, dtype=ms.float32), Tensor(H - 1, dtype=ms.float32), H),
-                ops.linspace(Tensor(0, dtype=ms.float32), Tensor(W - 1, dtype=ms.float32), W),
-            )  # (h, w)
+                ops.linspace(Tensor(0, dtype=ms.float32), Tensor(W - 1, dtype=ms.float32), W), indexing='ij')  # (h, w)
 
             grid = ops.cat([grid_x.expand_dims(-1), grid_y.expand_dims(-1)], -1)  # (h ,w, 2)
 
-            scale = ops.cat([valid_W.expand_dims(-1), valid_H.expand_dims(-1)], 1).view(N, 1, 1, 2)
+            scale = ops.cat([valid_w.expand_dims(-1), valid_h.expand_dims(-1)], 1).view(bs, 1, 1, 2)
             # (bs, h ,w, 2), normalized to valid range
-            grid = (grid.expand_dims(0).broadcast_to(N, -1, -1, -1) + 0.5) / scale
-            wh = ops.ones_like(grid) * 0.05 * (2.0 ** lvl)  # preset wh, larger wh for higher level
-            proposal = ops.cat((grid, wh), -1).view(N, -1, 4)  # (bs, hw, 4)
+            grid = (grid.expand_dims(0).broadcast_to((bs, -1, -1, -1)) + 0.5) / scale
+            hw = ops.ones_like(grid) * 0.05 * (2.0 ** lvl)  # preset wh, larger wh for higher level
+            proposal = ops.cat((grid, hw), -1).view(bs, -1, 4)  # (bs, hw, 4)
             proposals.append(proposal)
             _cur += H * W
 
@@ -224,8 +235,8 @@ class DINOTransformer(nn.Cell):
         output_proposals = ops.cat(proposals, 1)  # (bs, sum(hw), 4)
         # filter those whose centers are too close to the margin or wh too small or too large
         output_proposals_valid = ((output_proposals > 0.01) & (output_proposals < 0.99)).all(
-            -1, keepdim=True
-        )
+            -1, keep_dims=True
+        )  # (bs, sum(hw), 1)
         output_proposals = ops.log(output_proposals / (1 - output_proposals))  # unsigmoid
         # filter proposal in the padding area
         output_proposals = output_proposals.masked_fill(
@@ -275,8 +286,12 @@ class DINOTransformer(nn.Cell):
     def get_valid_ratio(self, mask):
         """Get the valid(non-pad) ratios of feature maps of all levels."""
         _, H, W = mask.shape
-        valid_H = ops.sum(~mask[:, :, 0], 1)
-        valid_W = ops.sum(~mask[:, 0, :], 1)
+        h_mask_not, w_mask_not = ~mask[:, :, 0], ~mask[:, 0, :]
+        if mask.dtype != ms.float_:
+            h_mask_not = ops.cast(h_mask_not, ms.float32)
+            w_mask_not = ops.cast(w_mask_not, ms.float32)
+        valid_H = ops.sum(h_mask_not, 1)
+        valid_W = ops.sum(w_mask_not, 1)
         valid_ratio_h = valid_H.float() / H
         valid_ratio_w = valid_W.float() / W
         valid_ratio = ops.stack([valid_ratio_w, valid_ratio_h], -1)
@@ -301,7 +316,6 @@ class DINOTransformerEncoder(TransformerLayerSequence):
                     embed_dim=embed_dim,
                     num_heads=num_heads,
                     dropout=attn_dropout,
-                    batch_first=True,
                     num_levels=num_feature_levels,
                 ),
                 ffn=FFN(
@@ -311,7 +325,7 @@ class DINOTransformerEncoder(TransformerLayerSequence):
                     num_fcs=2,
                     ffn_drop=ffn_dropout,
                 ),
-                norm=nn.LayerNorm(embed_dim),
+                norm=nn.LayerNorm((embed_dim,)),
                 operation_order=("self_attn", "norm", "ffn", "norm"),
             ),
             num_layers=num_layers,
@@ -324,7 +338,7 @@ class DINOTransformerEncoder(TransformerLayerSequence):
         else:
             self.post_norm_layer = None
 
-    def constuct(
+    def construct(
             self,
             query,
             key,
@@ -374,13 +388,11 @@ class DINOTransformerDecoder(TransformerLayerSequence):
                         embed_dim=embed_dim,
                         num_heads=num_heads,
                         attn_drop=attn_dropout,
-                        batch_first=True,
                     ),
                     MultiScaleDeformableAttention(
                         embed_dim=embed_dim,
                         num_heads=num_heads,
                         dropout=attn_dropout,
-                        batch_first=True,
                         num_levels=num_feature_levels,
                     ),
                 ],
@@ -390,7 +402,7 @@ class DINOTransformerDecoder(TransformerLayerSequence):
                     output_dim=embed_dim,
                     ffn_drop=ffn_dropout,
                 ),
-                norm=nn.LayerNorm(embed_dim),
+                norm=nn.LayerNorm((embed_dim,)),
                 operation_order=("self_attn", "norm", "cross_attn", "norm", "ffn", "norm"),
             ),
             num_layers=num_layers,
@@ -403,7 +415,7 @@ class DINOTransformerDecoder(TransformerLayerSequence):
         self.bbox_embed = None
         self.class_embed = None
         self.look_forward_twice = look_forward_twice
-        self.norm = nn.LayerNorm(embed_dim)
+        self.norm = nn.LayerNorm((embed_dim,))
 
     def construct(
             self,
@@ -425,25 +437,26 @@ class DINOTransformerDecoder(TransformerLayerSequence):
                 reference_points (Tensor[bs, num_query, 4|2]): output reference point of each layer
             """
         output = query
-        bs, num_queries, _ = output.size()
+        bs, num_queries, _ = output.shape
         if reference_points.dim() == 2:
-            reference_points = reference_points.unsqueeze(0).repeat(bs, 1, 1)  # bs, num_query, 4
+            reference_points = ms_np.tile(reference_points.unsqueeze(0), (bs, 1, 1))  # bs, num_query, 4
 
         intermediate = []
         intermediate_reference_points = []
         for layer_idx, layer in enumerate(self.layers):
             if reference_points.shape[-1] == 4:
                 # normalized to the whole image (including padding area)
+                # (bs, num_query, num_level, 1) * (bs, 1, num_level, 4) -> (bs, num_query, num_level, 4)
                 reference_points_input = (
                         reference_points[:, :, None]
                         * ops.cat([valid_ratios, valid_ratios], -1)[:, None]
-                )  # (bs, num_query, num_level, 4)
+                )
             else:
                 assert reference_points.shape[-1] == 2
                 reference_points_input = reference_points[:, :, None] * valid_ratios[:, None]
             # reference is almost the same for all level, pick the first one
-            # TODO to compat with len(reference_points) == 2
-            query_sine_embed = get_sine_pos_embed(reference_points_input[:, :, 0, :])  # (bs, num_query, embed_dim)
+            # TODO to compact with len(reference_points) == 2
+            query_sine_embed = get_sine_pos_embed(reference_points_input[:, :, 0, :])  # (bs, num_query, 2*embed_dim)
             query_pos = self.ref_point_head(query_sine_embed)  # (bs, num_query, embed_dim)
 
             output = layer(
@@ -470,7 +483,7 @@ class DINOTransformerDecoder(TransformerLayerSequence):
                     new_reference_points = tmp
                     new_reference_points[..., :2] = tmp[..., :2] + inverse_sigmoid(reference_points)
                     new_reference_points = new_reference_points.sigmoid()
-                reference_points = new_reference_points.detach()
+                reference_points = ops.stop_gradient(new_reference_points)
 
             if self.return_intermediate:
                 intermediate.append(self.norm(output))

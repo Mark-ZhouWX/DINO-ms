@@ -15,7 +15,8 @@ def detector_postprocess(results, output_height: int, output_width: int):
         results (dict): the raw outputs from the detector.
             `results['image_size']` contains the input image resolution the detector sees.
             This object might be modified in-place.
-        output_height, output_width: the desired output resolution.
+        output_height: the desired output resolution.
+        output_width: the desired output resolution.
     Returns:
         Instances: the resized output from the model, based on the output resolution
     """

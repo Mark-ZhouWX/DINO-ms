@@ -4,7 +4,8 @@ from mindspore import nn
 
 
 class ConvNormAct(nn.Cell):
-    """Utility module that stacks one convolution 2D layer,
+    """
+    Utility module that stacks one convolution 2D layer,
     a normalization layer and an activation function.
 
     Args:
@@ -14,7 +15,7 @@ class ConvNormAct(nn.Cell):
         stride (int): Stride of convolution. Default: 1.
         padding (int): Padding added to all four sides of the input. Default: 0.
         dilation (int): Spacing between kernel elements. Default: 1.
-        groups (int): Number of blocked connections from input channels
+        group (int): Number of blocked connections from input channels
             to output channels. Default: 1.
         bias (bool): if True, adds a learnable bias to the output. Default: True.
         norm_layer (nn.Module): Normalization layer used in `ConvNormAct`. Default: None.
@@ -29,7 +30,7 @@ class ConvNormAct(nn.Cell):
         stride: int = 1,
         padding: int = 0,
         dilation: int = 1,
-        groups: int = 1,
+        group: int = 1,
         bias: bool = True,
         norm_layer: nn.Cell = None,
         activation: nn.Cell = None,
@@ -43,14 +44,14 @@ class ConvNormAct(nn.Cell):
             stride=stride,
             padding=padding,
             dilation=dilation,
-            groups=groups,
-            bias=bias,
+            group=group,
+            has_bias=bias,
             **kwargs,
         )
         self.norm = norm_layer
         self.activation = activation
 
-    def forward(self, x):
+    def construct(self, x):
         """Forward function for `ConvNormAct`"""
         x = self.conv(x)
         if self.norm is not None:

@@ -49,7 +49,7 @@ class PositionEmbeddingSine(nn.Cell):
         self.eps = eps
         self.offset = offset
 
-    def forward(self, mask: Tensor) -> Tensor:
+    def construct(self, mask: Tensor) -> Tensor:
         """Forward function for `PositionEmbeddingSine`.
 
         Args:
@@ -75,7 +75,7 @@ class PositionEmbeddingSine(nn.Cell):
         pos_y = y_embed[:, :, :, None] / dim_t
 
         # use view as mmdet instead of flatten for dynamically exporting to ONNX
-        B, H, W = mask.size()
+        B, H, W = mask.shape
         pos_x = ops.stack((pos_x[:, :, :, 0::2].sin(), pos_x[:, :, :, 1::2].cos()), axis=4).view(
             B, H, W, -1
         )
@@ -109,7 +109,8 @@ def get_sine_pos_embed(pos_tensor: Tensor, num_pos_feats: int = 128, temperature
 
     def sine_func(x: Tensor):
         sin_x = x * scale / dim_t
-        sin_x = ops.stack((sin_x[:, :, 0::2].sin(), sin_x[:, :, 1::2].cos()), axis=3).flatten(2)
+        sin_x = ops.stack((sin_x[:, :, 0::2].sin(), sin_x[:, :, 1::2].cos()), axis=3)
+        sin_x = sin_x.reshape(sin_x.shape[0], sin_x.shape[1], -1)
         return sin_x
 
     pos_res = [sine_func(x) for x in pos_tensor.split([1] * pos_tensor.shape[-1], axis=-1)]

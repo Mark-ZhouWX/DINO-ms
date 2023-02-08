@@ -4,6 +4,7 @@ from typing import Optional
 import mindspore as ms
 from mindspore import nn, ops, Tensor
 
+
 class Attention(nn.Cell):
     """
     Attention layer implementation, Rearrange Input -> B x N x hidden size.
@@ -60,7 +61,7 @@ class Attention(nn.Cell):
         out = self.out(out)
         out = self.out_drop(out)
 
-        return
+        return out
 
 
 class MultiheadAttention(nn.Cell):
@@ -94,7 +95,9 @@ class MultiheadAttention(nn.Cell):
         self.num_heads = num_heads
 
         self.attn_drop = nn.Dropout(keep_prob=1 - attn_drop)
-        self.proj_drop = nn.Dropout(keep_prob=1 - proj_drop)
+        self.out_drop = nn.Dropout(keep_prob=1 - proj_drop)
+
+        self.out_project = nn.Dense(embed_dim, embed_dim)
 
         self.head_dim = embed_dim // num_heads
 
@@ -170,7 +173,7 @@ class MultiheadAttention(nn.Cell):
         key = ops.reshape(key, (bs, self.num_heads, num_key, self.head_dim))
         value = ops.reshape(key, (bs, self.num_heads, num_key, self.head_dim))
         attn_output_weights = ops.BatchMatMul(transpose_b=True)(query, key)  # (bs, num_head, num_query, num_key)
-        attn_output_weights = ops.mul(attn_output_weights, self.scale)
+        attn_output_weights = ops.mul(attn_output_weights, self.softmax_scale)
         if attn_mask is not None:
             if attn_mask.dtype != ms.bool_:
                 raise ValueError(f'attention mask type should be bool, but got {attn_mask.dtype} instead')
@@ -181,13 +184,15 @@ class MultiheadAttention(nn.Cell):
             # (bs, 1, 1, num_key)  -> (bs, num_head, num_query, num_key)
             attn_output_weights = ops.masked_fill(attn_output_weights,
                                                   key_padding_mask[:, None, None, :], float("-inf"))
-        attn = self.softmax(attn_output_weights)
+
+        # (bs, num_head, num_query, num_key) -> (bs, num_head, num_query, num_key)
+        attn = ops.softmax(attn_output_weights, -1)
         attn = self.attn_drop(attn)
 
         out = ops.BatchMatMul()(attn, value)  # (bs, num_head, num_query, head_dim)
-        out = self.transpose(out, (0, 2, 1, 3))  # (bs, num_query, num_head, head_dim)
-        out = self.reshape(out, (bs, num_query, self.embed_dim))
-        out = self.out(out)
-        out = self.proj_drop(out)
+        out = ops.transpose(out, (0, 2, 1, 3))  # (bs, num_query, num_head, head_dim)
+        out = ops.reshape(out, (bs, num_query, self.embed_dim))
+        out = self.out_project(out)
+        out = self.out_drop(out)
 
-        return identity + self.proj_drop(out)
+        return identity + out

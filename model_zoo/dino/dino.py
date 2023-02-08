@@ -5,11 +5,13 @@ from typing import List, Optional
 import mindspore as ms
 from mindspore import nn, ops, Tensor
 import mindspore.common.initializer as init
+import mindspore.numpy as ms_np
 
 from common.layers.mlp import MLP
 from common.utils.misc import inverse_sigmoid
 from common.utils.box_ops import box_cxcywh_to_xyxy, box_xyxy_to_cxcywh
 from common.utils.postprocessing import detector_postprocess
+from common.utils.preprocessing import pad_as_batch
 
 
 class DINO(nn.Cell):
@@ -34,7 +36,6 @@ class DINO(nn.Cell):
         aux_loss (bool): Whether to calculate auxiliary loss in criterion. Default: True.
         select_box_nums_for_evaluation (int): the number of topk candidates
             slected at postprocess for evaluation. Default: 300.
-        device (str): Training device. Default: "cuda".
     """
 
     def __init__(self,
@@ -45,12 +46,11 @@ class DINO(nn.Cell):
                  embed_dim: int,
                  num_classes: int,
                  num_queries: int,
-                 criterion: nn.Cell,
+                 criterion: nn.Cell = None,
                  pixel_mean: List[float] = [123.675, 116.280, 103.530],
                  pixel_std: List[float] = [58.395, 57.120, 57.375],
                  aux_loss: bool = True,
                  select_box_nums_for_evaluation: int = 300,
-                 device="cuda",
                  dn_number: int = 100,
                  label_noise_ratio: float = 0.2,
                  box_noise_scale: float = 1.0,
@@ -75,6 +75,7 @@ class DINO(nn.Cell):
         # define classification head and box head
         self.class_embed = nn.Dense(embed_dim, num_classes)
         self.bbox_embed = MLP(embed_dim, embed_dim, 4, 3)
+        self.num_classes = num_classes
 
         # define where to calculate auxiliary loss in criterion
         self.aux_loss = aux_loss
@@ -87,7 +88,6 @@ class DINO(nn.Cell):
         self.box_noise_scale = box_noise_scale
 
         # normalizer for input raw images
-        self.device = device
         pixel_mean = Tensor(pixel_mean).view(3, 1, 1)
         pixel_std = Tensor(pixel_std).view(3, 1, 1)
         self.normalizer = lambda x: (x - pixel_mean) / pixel_std
@@ -99,7 +99,7 @@ class DINO(nn.Cell):
         bbox_last_layer_weight = self.bbox_embed.layers[-1].weight
         bbox_last_layer_weight.set_data(init.initializer(init.Constant(0),
                                                          bbox_last_layer_weight.shape, bbox_last_layer_weight.dtype))
-        for _, neck_layer in self.neck.name_cells():
+        for neck_layer in self.neck.name_cells():
             if isinstance(neck_layer, nn.Conv2d):
                 neck_layer.weight.set_data(init.initializer(init.XavierUniform(gain=1)),
                                            neck_layer.weight.shape, neck_layer.weight.dtype)
@@ -109,17 +109,21 @@ class DINO(nn.Cell):
         # hack implementaion, the class_embed of the last layer of transformer.decoder serves for two stage
         num_pred = transformer.decoder.num_layers + 1
         self.class_embed = nn.CellList([copy.deepcopy(self.class_embed) for _ in range(num_pred)])
-        self.bbox_embed = nn.CellList([copy.deepcopy(self.bbox_embed) for i in range(num_pred)])
+        self.bbox_embed = nn.CellList([copy.deepcopy(self.bbox_embed) for _ in range(num_pred)])
 
-        # TODO bias修改部分数据
-        nn.init.constant_(self.bbox_embed[0].layers[-1].bias.data[2:], -2.0)
+        bias_init_data = self.bbox_embed[0].layers[-1].bias.data
+        bias_init_data[2:] = Tensor(-2.0)
+        # p_type, d_type = self.bbox_embed[0].layers[-1].bias.shape, self.bbox_embed[0].layers[-1].bias.dtype
+        # self.bbox_embed[0].layers[-1].bias.set_data(init.initializer(bias_init_data, p_type, d_type))
 
         self.transformer.decoder.class_embed = self.class_embed
         self.transformer.decoder.bbox_embed = self.bbox_embed
 
         for bbox_embed_layer in self.bbox_embed:
-            # TODO bias修改部分数据
-            nn.init.constant_(bbox_embed_layer.layers[-1].bias.data[2:], 0.0)
+            bias_init_data = bbox_embed_layer.layers[-1].bias.data
+            bias_init_data[2:] = Tensor(-0.0)
+            p_type, d_type = bbox_embed_layer.layers[-1].bias.shape, bbox_embed_layer.layers[-1].bias.dtype
+            bbox_embed_layer.layers[-1].bias.set_data(init.initializer(bias_init_data, p_type, d_type))
 
         # set topk boxes selected for inference
         self.select_box_nums_for_evaluation = select_box_nums_for_evaluation
@@ -159,13 +163,17 @@ class DINO(nn.Cell):
         # pad images in the batch to the same size (max image size in the batch)
         images, unpad_img_sizes = self.preprocess_image(batched_inputs)  # tensor (b, c, h, w)
 
-        # calculate input mask, only training model need mask
+        # calculate input mask,
+        # TODO only training model need mask， 此处不理解，mask不会影响inference吗，看下其他的代码参考下
         batch_size, _, H, W = images.shape
-        img_masks = images.new_ones((batch_size, H, W))
+
         if self.training:
+            img_masks = images.new_ones((batch_size, H, W))
             for img_id in range(batch_size):
-                img_h, img_w = batched_inputs[img_id]["instances"].image_size
+                img_h, img_w = batched_inputs[img_id]["instances"]['image_size']
                 img_masks[img_id, :img_h, : img_w] = 0
+        else:
+            img_masks = images.new_zeros((batch_size, H, W))
 
         # extract features with backbone
         features = self.backbone(images)
@@ -176,9 +184,9 @@ class DINO(nn.Cell):
         multi_level_position_embeddings = []
         for feat in multi_level_feats:
             resize_nearest = ops.ResizeNearestNeighbor(size=feat.shape[-2:])
-            multi_level_masks.append(
-                ops.squeeze(resize_nearest(ops.expand_dims(img_masks, 0)))
-            )
+            l_mask = ops.squeeze(resize_nearest(ops.expand_dims(img_masks, 0)))
+            l_mask = ops.cast(l_mask, ms.bool_)
+            multi_level_masks.append(l_mask)
             multi_level_position_embeddings.append(self.position_embedding(multi_level_masks[-1]))
 
         # de-noising preprocessing
@@ -208,7 +216,7 @@ class DINO(nn.Cell):
             multi_level_masks,
             multi_level_position_embeddings,
             query_embeds,  # gt query and target
-            attn_mask=[attn_mask, None],
+            attn_masks=[attn_mask, None],
         )
 
         # hack implementation for distributed training
@@ -244,11 +252,13 @@ class DINO(nn.Cell):
         # prepare for loss computation
         output = {"pred_logits": outputs_class[-1], "pred_boxes": outputs_coord[-1]}
         if self.aux_loss:
+            # len(output["aux_outputs"]) = num_decoder_layer - 1
             output["aux_outputs"] = self._set_aux_loss(outputs_class, outputs_coord)
 
         # prepare two stage output
         interm_coord = enc_reference
         # hack implementaion, the class_embed of the last layer of transformer.decoder serves for two stage
+        # TODO 感觉这里可以写在transformer class里，直接输出interm_class，不知作者这么写是不是为了兼容其他的detr
         interm_class = self.transformer.decoder.class_embed[-1](enc_state)
         output["enc_outputs"] = {"pred_logits": interm_class, "pred_boxes": interm_coord}
 
@@ -263,6 +273,7 @@ class DINO(nn.Cell):
                 self.vis_iter += 1
 
             # TODO compute loss
+            assert self.criterion is not None, "criterion should not be None at training"
             loss_dict = self.criterion(output, targets, dn_meta)
             weight_dict = self.criterion.weight_dict
             for k in loss_dict.keys():
@@ -298,19 +309,22 @@ class DINO(nn.Cell):
                 """
         assert len(box_cls) == len(image_sizes)
         results = []
+        bs, num_query, num_class = box_cls.shape
 
         # box_cls.shape: 1, 300, 80
         # box_pred.shape: 1, 300, 4
         prob = box_cls.sigmoid()
         # TODO 不理解为什么如此选取topk，这样选取的bbox有许多重复的
-        topk_values, topk_indexes = ops.topk(
-            prob.view(box_cls.shape[0], -1), self.select_box_nums_for_evaluation, dim=1
+        # (bs, num_query, num_class) -> (bs, num_query*num_class) -> (bs, eval_num) + (bs, eval_num)
+        topk_values, topk_indexes_full = ops.topk(
+            prob.view(bs, -1), self.select_box_nums_for_evaluation, dim=1
         )
         scores = topk_values
-        topk_boxes = ops.div(topk_indexes, box_cls.shape[2], rounding_mode="floor")
-        labels = topk_indexes % box_cls.shape[2]
 
-        boxes = ops.gather_elements(box_pred, 1, topk_boxes.unsqueeze(-1).repeat(1, 1, 4))
+        topk_boxes_ind = ops.div(topk_indexes_full, num_class, rounding_mode="floor")  # (bs, eval_num)
+
+        labels = topk_indexes_full % num_class  # (bs, eval_num)
+        boxes = ops.gather_elements(box_pred, 1, ms_np.tile(topk_boxes_ind.unsqueeze(-1), (1, 1, 4)))  # (bs,eval_num,4)
 
         # For each box we assign the best class or the second best if the best on is `no_object`.
         # scores, labels = F.softmax(box_cls, dim=-1)[:, :, :-1].max(-1)
@@ -386,9 +400,6 @@ class DINO(nn.Cell):
 
         if dn_number == 0:
             dn_number = 1
-        # flattened mask
-        # [1,1,1,  1,1,  1,1,1,1]
-        # unmask_bbox = unmask_label = ops.cat(known)
         # flattened labels, (sum(instance_i))
         # eg: [7,3,2, 6,8, 9,1,4,5]
         labels = ops.cat([t["labels"] for t in targets])
@@ -400,22 +411,15 @@ class DINO(nn.Cell):
             [ops.full_like(t["labels"].long(), i) for i, t in enumerate(targets)]
         )
 
-        # # eg: [[0], [1], [2], [3], [4], [5], [6]]
-        # known_indice = ops.nonzero(unmask_label + unmask_bbox)
-        # # [0, 1, 2, 3, 4, 5, 6]
-        # known_indice = known_indice.view(-1)
-        #
-        # known_indice = known_indice.repeat(2 * dn_number, 1).view(-1)
-
         # (sum(instance_i) * 2 * dn_number)
-        known_labels = labels.repeat(2 * dn_number, 1).view(-1)
+        known_labels = ms_np.tile(labels, (2 * dn_number, 1)).view(-1)
         # (sum(instance_i) * 2 * dn_number)
         # eg: [0,0,0, 1,1, 2,2,2,2,  0,0,0, 1,1, 2,2,2,2, ...]
-        known_bid = batch_idx.repeat(2 * dn_number, 1).view(-1)
+        known_bid = ms_np.tile(batch_idx, (2 * dn_number, 1)).view(-1)
         # (sum(instance_i)* 2 * dn_number, 4)
-        known_bboxs = boxes.repeat(2 * dn_number, 1)
-        known_labels_expaned = known_labels.clone()
-        known_bbox_expand = known_bboxs.clone()
+        known_bboxs = ms_np.tile(boxes, (2 * dn_number, 1))
+        known_labels_expaned = copy.deepcopy(known_labels)
+        known_bbox_expand = copy.deepcopy(known_bboxs)
 
         if label_noise_ratio > 0:
             # (sum(instance_i) * 2 * dn_number)
@@ -432,12 +436,10 @@ class DINO(nn.Cell):
 
         # equal to original dn_number
         pad_size = int(single_padding * 2 * dn_number)
-        # (dn_number_group, sum(instance))
-        positive_idx = (
-            ops.Tensor(range(len(boxes))).long().unsqueeze(0).repeat(dn_number, 1)
-        )
-
-        positive_idx += (ops.Tensor(range(dn_number)) * len(boxes) * 2).long().unsqueeze(1)
+        # (dn_number_group, sum(instance))   sum(instance): total number of gt boxes in a batch
+        positive_idx = ms_np.tile(ops.arange(end=len(boxes), dtype=ms.int64).unsqueeze(0), (dn_number, 1))
+        # (dn_number, 1) -> (dn_number_group, sum(instance))
+        positive_idx += (ops.arange(end=dn_number, dtype=ms.int64) * len(boxes) * 2).unsqueeze(1)
         positive_idx = positive_idx.flatten()
         negative_idx = positive_idx + len(boxes)
         if box_noise_scale > 0:
@@ -452,16 +454,14 @@ class DINO(nn.Cell):
             diff[:, 2:] = known_bboxs[:, 2:] / 2
 
             # random 1 or -1
-            rand_sign = (
-                ops.randint_like(known_bboxs, low=0, high=2, dtype=ms.float32) * 2.0 - 1.0
-            )
+            rand_sign = ops.cast((ops.randint_like(known_bboxs, low=0, high=2) * 2.0 - 1.0), ms.float32)
             rand_part = ops.rand_like(known_bboxs)  # uniform(0,1)
             # negative bbox has offset within (1, 2)*half_wh, positive has (0, 1)*half_wh
             rand_part[negative_idx] += 1.0
             rand_part *= rand_sign
             known_bbox_ = known_bbox_ + ops.mul(rand_part, diff) * box_noise_scale
             known_bbox_ = known_bbox_.clamp(min=0.0, max=1.0)  # prevent out of image
-            known_bbox_expand[:, :2] = (known_bbox_[:, :2] + known_bbox_[:, 2:]) / 2
+            known_bbox_expand[:, :2] = (known_bbox_[:, :2] + known_bbox_[:, 2:]) / 2  # gaussion distribution
             known_bbox_expand[:, 2:] = known_bbox_[:, 2:] - known_bbox_[:, :2]
 
         m = known_labels_expaned.long()
@@ -469,20 +469,21 @@ class DINO(nn.Cell):
         input_label_embed = label_enc(m)
         input_bbox_embed = inverse_sigmoid(known_bbox_expand)
 
-        padding_label = ops.zeros(pad_size, hidden_dim)
-        padding_bbox = ops.zeros(pad_size, 4).cuda()
+        padding_label = ops.zeros((pad_size, hidden_dim))
+        padding_bbox = ops.zeros((pad_size, 4))
 
-        input_query_label = padding_label.repeat(batch_size, 1, 1)
-        input_query_bbox = padding_bbox.repeat(batch_size, 1, 1)
+        input_query_label = ms_np.tile(padding_label, (batch_size, 1, 1))
+        input_query_bbox = ms_np.tile(padding_bbox, (batch_size, 1, 1))
 
         map_known_indice = ops.Tensor([])
         if len(known_num):
             map_known_indice = ops.cat(
-                [ops.Tensor(range(num)) for num in known_num]
+                [ops.arange(end=num) for num in known_num]
             )  # eg:[0,1,2, 0,1, 0,1,2,3]
+            # eg: [[0,1,2, 0,1, 0,1,2,3,    4,5,6, 4,5, 4,5,6,7,      8,9,10, 8,9, 8,9,10,11], ...] single_padding=4
             map_known_indice = ops.cat(
                 [map_known_indice + single_padding * i for i in range(2 * dn_number)]
-            ).long()  # eg: [[4,5,6, 4,5, 4,5,6,7], [8,9,10, 8,9, 8,9,10,11], ...] single_padding=4
+            ).long()
         if len(known_bid):
             input_query_label[(known_bid.long(), map_known_indice)] = input_label_embed
             input_query_bbox[(known_bid.long(), map_known_indice)] = input_bbox_embed
@@ -499,9 +500,7 @@ class DINO(nn.Cell):
                     single_padding * 2 * (i + 1): pad_size,
                 ] = True
             if i == dn_number - 1:
-                attn_mask[
-                    single_padding * 2 * i: single_padding * 2 * (i + 1), : single_padding * i * 2
-                ] = True
+                attn_mask[single_padding * 2 * i: single_padding * 2 * (i + 1), : single_padding * i * 2] = True
             else:
                 # gt queries after the i-th gt query
                 attn_mask[
@@ -510,11 +509,11 @@ class DINO(nn.Cell):
                 ] = True
                 # # gt queries before the i-th gt query
                 attn_mask[
-                    single_padding * 2 * i : single_padding * 2 * (i + 1), : single_padding * 2 * i
+                    single_padding * 2 * i: single_padding * 2 * (i + 1), : single_padding * 2 * i
                 ] = True
 
         dn_meta = {
-            "single_padding": single_padding * 2,  # query num per group
+            "single_padding": single_padding * 2,  # query num per group, p+n
             "dn_num": dn_number,  # group num
         }
         # (bs, original dn_number * 2, embed_dim)
@@ -522,13 +521,18 @@ class DINO(nn.Cell):
         # (bs, original dn_number * 2, original dn_number * 2)
         return input_query_label, input_query_bbox, attn_mask, dn_meta
 
+    def preprocess_image(self, batched_inputs):
+        images = [self.normalizer(x["image"]) for x in batched_inputs]
+        images = pad_as_batch(images)
+        return images
+
     def prepare_targets(self, targets):
         new_targets = []
         for targets_per_image in targets:
             h, w = targets_per_image['image_size']
             image_size_xyxy = Tensor([w, h, w, h], dtype=ms.float32)
             gt_classes = targets_per_image['gt_classes']
-            gt_boxes = targets_per_image['gt_boxes'] / image_size_xyxy
+            gt_boxes = targets_per_image['gt_boxes'] / image_size_xyxy  # with reference to valid w,h
             gt_boxes = box_xyxy_to_cxcywh(gt_boxes)
             new_targets.append({"labels": gt_classes, "boxes": gt_boxes})
         return new_targets

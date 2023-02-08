@@ -201,7 +201,8 @@ class TransformerLayerSequence(nn.Cell):
             assert isinstance(transformer_layers, list) and len(transformer_layers) == num_layers
 
     def construct(self, *args, **kwargs):
-        """Forward function of `TransformerLayerSequence`. The users should inherit
+        """
+        Forward function of `TransformerLayerSequence`. The users should inherit
         `TransformerLayerSequence` and implemente their own forward function.
         """
         raise NotImplementedError()

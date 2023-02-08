@@ -3,14 +3,14 @@ from typing import Dict, List
 
 from mindspore import nn
 
-from models.layers import ConvNormAct
+from common.layers.conv import ConvNormAct
 
 
 class ChannelMapper(nn.Cell):
     """Channel Mapper for reduce/increase channels of backbone features. Modified
     from `mmdet <https://github.com/open-mmlab/mmdetection/blob/master/mmdet/models/necks/channel_mapper.py>`_.
 
-    This is used to reduce/increase the channels of backbone features.
+    This is used to reduce/increase the channels of backbone featuresa, and usually won't change the feature size.
 
     Args:
         input_shape (Dict[str, ShapeSpec]): A dict which contains the backbone features meta infomation,
@@ -23,7 +23,7 @@ class ChannelMapper(nn.Cell):
         stride (int, optional): Stride of convolution for each scale. Default: 1.
         bias (bool, optional): If True, adds a learnable bias to the output of each scale.
             Default: True.
-        groups (int, optional): Number of blocked connections from input channels to
+        group (int, optional): Number of blocked connections from input channels to
             output channels for each scale. Default: 1.
         dilation (int, optional): Spacing between kernel elements for each scale.
             Default: 1.
@@ -72,7 +72,7 @@ class ChannelMapper(nn.Cell):
         kernel_size: int = 3,
         stride: int = 1,
         bias: bool = True,
-        groups: int = 1,
+        group: int = 1,
         dilation: int = 1,
         norm_layer: nn.Cell = None,
         activation: nn.Cell = None,
@@ -97,7 +97,7 @@ class ChannelMapper(nn.Cell):
                     stride=stride,
                     padding=(kernel_size - 1) // 2,
                     bias=bias,
-                    groups=groups,
+                    group=group,
                     dilation=dilation,
                     norm_layer=copy.deepcopy(norm_layer),
                     activation=copy.deepcopy(activation),
@@ -118,8 +118,9 @@ class ChannelMapper(nn.Cell):
                         kernel_size=3,
                         stride=2,
                         padding=1,
+                        pad_mode='pad',
                         bias=bias,
-                        groups=groups,
+                        group=group,
                         dilation=dilation,
                         norm_layer=copy.deepcopy(norm_layer),
                         activation=copy.deepcopy(activation),
@@ -130,7 +131,7 @@ class ChannelMapper(nn.Cell):
         self.in_features = in_features
         self.out_channels = out_channels
 
-    def forward(self, inputs):
+    def construct(self, inputs):
         """Forward function for ChannelMapper
 
         Args:
