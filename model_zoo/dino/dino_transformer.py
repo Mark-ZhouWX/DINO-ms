@@ -207,8 +207,8 @@ class DINOTransformer(nn.Cell):
         bs, sum_hw, embed_dim = memory.shape
         proposals = []
         _cur = 0  # start index of the ith layer
-        spatial_shapes_np = spatial_shapes.asnumpy()
-        for lvl, (H, W) in enumerate(spatial_shapes_np):
+        for lvl, (H, W) in enumerate(spatial_shapes):
+            H, W = int(H), int(W)
             mask_flatten_ = memory_padding_mask[:, _cur: (_cur + H * W)].view(bs, H, W, 1)
             h_mask_not, w_mask_not = ~mask_flatten_[:, :, 0, 0], ~mask_flatten_[:, 0, :, 0]
             if mask_flatten_.dtype != ms.float_:

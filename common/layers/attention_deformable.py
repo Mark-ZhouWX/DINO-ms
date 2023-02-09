@@ -231,9 +231,8 @@ def multi_scale_deformable_attn_pytorch(
     value_list = ms_np.split(value, indices_or_sections=[int(i) for i in indices_or_sections], axis=1)
     sampling_grids = 2 * sampling_locations - 1
     sampling_value_list = []
-    value_spatial_shapes_np = value_spatial_shapes.asnumpy()
-    for level, (H_, W_) in enumerate(value_spatial_shapes_np):
-        # H_, W_ = int(H_), int(W_)
+    for level, (H_, W_) in enumerate(value_spatial_shapes):
+        H_, W_ = int(H_), int(W_)
         # bs, H_*W_, num_heads, head_embed_dims ->
         # bs, H_*W_, num_heads*head_embed_dims ->
         # bs, num_heads*head_embed_dims, H_*W_ ->

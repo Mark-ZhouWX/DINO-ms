@@ -1,4 +1,5 @@
 import os
+import platform
 
 import cv2
 import mindspore as ms
@@ -10,6 +11,7 @@ from common.layers.position_embedding import PositionEmbeddingSine
 from model_zoo.dino.dino import DINO
 from model_zoo.dino.dino_transformer import DINOTransformer, DINOTransformerEncoder, DINOTransformerDecoder
 from model_zoo.dino.dn_criterion import DINOCriterion
+from test import is_windows
 
 # set context
 ms.set_context(mode=ms.PYNATIVE_MODE, device_target='CPU')
@@ -103,7 +105,7 @@ dino = DINO(backbone,
             )
 
 # test inference runtime
-image_root = r"C:\02Data\demo\image"
+image_root = r"C:\02Data\demo\image" if is_windows else '/data/zhouwuxing/demo/'
 image_path1 = os.path.join(image_root, 'hrnet_demo.jpg')
 image_path2 = os.path.join(image_root, 'road554.png')
 
