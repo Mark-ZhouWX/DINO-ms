@@ -4,10 +4,12 @@ import cv2
 import mindspore as ms
 from mindspore import nn, ops, Tensor
 from common.detr.backbone.resnet import resnet50
+from common.detr.matcher.matcher import HungarianMatcher
 from common.detr.neck.channel_mapper import ChannelMapper
 from common.layers.position_embedding import PositionEmbeddingSine
 from model_zoo.dino.dino import DINO
 from model_zoo.dino.dino_transformer import DINOTransformer, DINOTransformerEncoder, DINOTransformerDecoder
+from model_zoo.dino.dn_criterion import DINOCriterion
 
 # set context
 ms.set_context(mode=ms.PYNATIVE_MODE, device_target='CPU')
@@ -60,6 +62,29 @@ transformer = DINOTransformer(
     two_stage_num_proposals=900,
 )
 
+criterion = DINOCriterion(
+    num_classes=80,
+    matcher=HungarianMatcher(
+        cost_class=2.0,
+        cost_bbox=5.0,
+        cost_giou=2.0,
+        cost_class_type='focal_loss_cost',
+        alpha=0.25,
+        gamma=2.0
+    ),
+    weight_dict=dict(
+        loss_class=1,
+        loss_bbox=5.0,
+        loss_giou=2.0,
+        loss_class_dn=1,
+        loss_bbox_dn=5.0,
+        loss_giou_dn=2.0
+    ),
+    loss_class_type='focal_loss',
+    alpha=0.25,
+    gamma=2.0,
+    two_stage_binary_cls=False,
+)
 dino = DINO(backbone,
             position_embedding,
             neck,
@@ -68,7 +93,7 @@ dino = DINO(backbone,
             num_classes=80,
             num_queries=900,
             aux_loss=True,
-            criterion=None,
+            criterion=criterion,
             pixel_mean=[123.675, 116.280, 103.530],
             pixel_std=[58.395, 57.120, 57.375],
             select_box_nums_for_evaluation=300,
@@ -88,10 +113,12 @@ inputs = [dict(image=Tensor.from_numpy(cv2.imread(image_path1)).transpose(2, 0, 
           dict(image=Tensor.from_numpy(cv2.imread(image_path2)).transpose(2, 0, 1),
                instances=dict(image_size=(400, 300), gt_classes=Tensor([21, 45, 9]),
                               gt_boxes=Tensor([[80, 220, 150, 320], [180, 100, 300, 200], [150, 150, 180, 180]])))]
-
+# infer
 # dino(inputs)
 
 
 # train
 dino.set_train()
 dino(inputs)
+
+# train one step

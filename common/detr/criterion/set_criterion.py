@@ -26,7 +26,11 @@ def sigmoid_focal_loss(inputs, targets, num_boxes, alpha: float = 0.25, gamma: f
         torch.Tensor: The computed sigmoid focal loss.
     """
     prob = inputs.sigmoid()
-    ce_loss = F.binary_cross_entropy_with_logits(inputs, targets, reduction="none")
+    _, _, num_class = inputs.shape
+    weight = ops.ones(num_class, dtype=inputs.dtype)
+    pos_weight = ops.ones(num_class, dtype=inputs.dtype)
+    ce_loss = ops.binary_cross_entropy_with_logits(inputs, targets,
+                                                   weight=weight, pos_weight=pos_weight, reduction="none")
     p_t = prob * targets + (1 - prob) * (1 - targets)
     loss = ce_loss * ((1 - p_t) ** gamma)
 
@@ -89,28 +93,34 @@ class SetCriterion(nn.Cell):
     def loss_labels(self, outputs, targets, indices, num_boxes):
         """
         Classification loss (Binary focal loss)
-        targets dicts must contain the key "labels" containing a tensor of dim [nb_target_boxes]
+        outputs (dict): predictions, a dict that contains pred_logits pred_bbox, etc.
+        targets (dict): targets, a dict that contains the key "labels" containing a tensor of dim [nb_target_boxes]
+        indices (List[Tuple[Tensor, Tensor]]): list with length batch_size, each element
+                                                is the indices of source query and target bbox.
         """
         assert "pred_logits" in outputs
         src_logits = outputs["pred_logits"]  # (bs, num_query, num_class)
         bs, num_query, num_class = src_logits.shape
 
-        idx = self._get_src_permutation_idx(indices)
+        # Assign gt label to all queries, the label of 'no object' is num_class
+        idx = self._get_src_permutation_idx(indices)  # tuple with batch_idx and query_idx
+        # (sum_instance,) [3,4,   7,2,9]
         target_classes_o = ops.cat([t["labels"][J] for t, (_, J) in zip(targets, indices)])
-        target_classes = ops.full(src_logits.shape[:2], self.num_classes, dtype=ms.int64)
+        # (bs, num_query)  value=80
+        target_classes = ops.full((bs, num_query), self.num_classes, dtype=ms.int64)
         target_classes[idx] = target_classes_o
 
         # Computation classification loss
         if self.loss_class_type == "ce_loss":
-            loss_class = ops.functional.cross_entropy(src_logits.transpose(1, 2), target_classes, self.empty_weight)
+            # TODO to check transpose, why
+            loss_class = ops.cross_entropy(ops.transpose(src_logits, (0, 2, 1)), target_classes, self.empty_weight)
         elif self.loss_class_type == "focal_loss":
             # src_logits: (b, num_queries, num_classes) = (2, 300, 80)
             # target_classes_one_hot = (2, 300, 80)
-            target_classes_onehot = ops.zeros(
-                [bs, num_query, num_class + 1], dtype=src_logits.dtype)
-
-            target_classes_onehot.scatter_(2, target_classes.unsqueeze(-1), 1)
-
+            target_classes_onehot = ops.zeros((bs, num_query, num_class + 1))
+            ones = ops.ones_like(target_classes.unsqueeze(-1)).astype(ms.float32)
+            target_classes_onehot = ops.tensor_scatter_elements(target_classes_onehot,
+                                                                target_classes.unsqueeze(-1), ones, axis=2)
             target_classes_onehot = target_classes_onehot[:, :, :-1]
 
             # TODO better use this
@@ -141,14 +151,16 @@ class SetCriterion(nn.Cell):
         The target boxes are expected in format (center_x, center_y, w, h), normalized by the image size.
         """
         assert "pred_boxes" in outputs
-        idx = self._get_src_permutation_idx(indices)
+        idx = self._get_src_permutation_idx(indices)  # tuple with batch_idx and query_idx of matched prediction
+        # outputs["pred_boxes"] (bs, num_query, 4)
         src_boxes = outputs["pred_boxes"][idx]
+        # pick out target boxes
         target_boxes = ops.cat([t["boxes"][i] for t, (_, i) in zip(targets, indices)], axis=0)
 
-        loss_bbox = ops.functional.l1_loss(src_boxes, target_boxes, reduction="none")
+        loss_bbox = ops.l1_loss(src_boxes, target_boxes, reduction="none")
 
         losses = {"loss_bbox": loss_bbox.sum() / num_boxes}
-
+        # (sum_instance, 4) -> (sum_instance, sum_instance) -> (sum_instance, sum_instance, sum_instance, sum_instance)
         loss_giou = 1 - ops.diag(
             generalized_box_iou(
                 box_cxcywh_to_xyxy(src_boxes),
@@ -161,15 +173,11 @@ class SetCriterion(nn.Cell):
 
     def _get_src_permutation_idx(self, indices):
         # permute predictions following indices
+        # (sum_instance,) eg: [0,0,  1,1,1]
         batch_idx = ops.cat([ops.full_like(src, i) for i, (src, _) in enumerate(indices)])
+        # (sum_instance,) eg: [7,10, 3,6,8]
         src_idx = ops.cat([src for (src, _) in indices])
         return batch_idx, src_idx
-
-    def _get_tgt_permutation_idx(self, indices):
-        # permute targets following indices
-        batch_idx = ops.cat([ops.full_like(tgt, i) for i, (_, tgt) in enumerate(indices)])
-        tgt_idx = ops.cat([tgt for (_, tgt) in indices])
-        return batch_idx, tgt_idx
 
     def get_loss(self, loss, outputs, targets, indices, num_boxes, **kwargs):
         loss_map = {
@@ -179,7 +187,7 @@ class SetCriterion(nn.Cell):
         assert loss in loss_map, f"do you really want to compute {loss} loss?"
         return loss_map[loss](outputs, targets, indices, num_boxes, **kwargs)
 
-    def forward(self, outputs, targets, return_indices=False):
+    def construct(self, outputs, targets, return_indices=False):
         """
         This performs the loss computation.
         Parameters:
@@ -211,6 +219,7 @@ class SetCriterion(nn.Cell):
         # Compute all the requested losses
         losses = {}
         for loss in self.losses:
+            # to replace with outputs_without_aux
             losses.update(self.get_loss(loss, outputs, targets, indices, num_boxes))
 
         # In case of auxiliary losses, we repeat this process with the output of each intermediate layer.

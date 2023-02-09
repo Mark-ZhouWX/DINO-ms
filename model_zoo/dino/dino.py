@@ -247,7 +247,7 @@ class DINO(nn.Cell):
 
         # de-noising postprocessing
         if dn_meta is not None:
-            output_class, outputs_coord = self.dn_post_process(outputs_class, outputs_coord, dn_meta)
+            outputs_class, outputs_coord = self.dn_post_process(outputs_class, outputs_coord, dn_meta)
 
         # prepare for loss computation
         output = {"pred_logits": outputs_class[-1], "pred_boxes": outputs_coord[-1]}

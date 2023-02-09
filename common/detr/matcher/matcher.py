@@ -1,4 +1,8 @@
-from mindspore import nn, ops
+import mindspore as ms
+from mindspore import nn, ops, Tensor
+from scipy.optimize import linear_sum_assignment
+
+from common.utils.box_ops import generalized_box_iou, box_cxcywh_to_xyxy
 
 
 class HungarianMatcher(nn.Cell):
@@ -45,7 +49,7 @@ class HungarianMatcher(nn.Cell):
             "focal_loss_cost",
         }, "only support ce loss or focal loss for computing class cost"
 
-    def forward(self, outputs, targets):
+    def construct(self, outputs, targets):
         """Forward function for `HungarianMatcher` which performs the matching.
 
         Args:
@@ -57,7 +61,8 @@ class HungarianMatcher(nn.Cell):
             targets (List[Dict[str, torch.Tensor]]): This is a list of targets (len(targets) = batch_size),
                 where each target is a dict containing:
 
-                - ``"labels"``: Tensor of shape (num_target_boxes, ) (where num_target_boxes is the number of ground-truth objects in the target) containing the class labels.  # noqa
+                - ``"labels"``: Tensor of shape (num_target_boxes, ) (where num_target_boxes is the number of
+                                ground-truth objects in the target) containing the class labels.  # noqa
                 - ``"boxes"``: Tensor of shape (num_target_boxes, 4) containing the target box coordinates.
 
         Returns:
@@ -70,21 +75,21 @@ class HungarianMatcher(nn.Cell):
         """
         bs, num_queries = outputs["pred_logits"].shape[:2]
 
-        # We flatten to compute the cost matrices in a batch
+        # Flatten batch to compute the cost matrices in a batch
         if self.cost_class_type == "ce_cost":
             out_prob = (
-                outputs["pred_logits"].flatten(0, 1).softmax(-1)
+                ops.reshape(outputs["pred_logits"], (bs * num_queries, -1)).softmax(-1)
             )  # [batch_size * num_queries, num_classes]
         elif self.cost_class_type == "focal_loss_cost":
             out_prob = (
-                outputs["pred_logits"].flatten(0, 1).sigmoid()
+                ops.reshape(outputs["pred_logits"], (bs * num_queries, -1)).sigmoid()
             )  # [batch_size * num_queries, num_classes]
 
-        out_bbox = outputs["pred_boxes"].flatten(0, 1)  # [batch_size * num_queries, 4]
+        out_bbox = ops.reshape(outputs["pred_boxes"], (bs * num_queries, -1))  # [batch_size * num_queries, 4]
 
-        # Also concat the target labels and boxes
-        tgt_ids = torch.cat([v["labels"] for v in targets])
-        tgt_bbox = torch.cat([v["boxes"] for v in targets])
+        # Also concat the target labels and boxes, flatten batch
+        tgt_ids = ops.cat([v["labels"] for v in targets])  # (sum_instance,)
+        tgt_bbox = ops.cat([v["boxes"] for v in targets])  # (sum_instance, 4)
 
         # Compute the classification cost.
         if self.cost_class_type == "ce_cost":
@@ -98,22 +103,30 @@ class HungarianMatcher(nn.Cell):
             neg_cost_class = (1 - alpha) * (out_prob**gamma) * (-(1 - out_prob + 1e-8).log())
             pos_cost_class = alpha * ((1 - out_prob) ** gamma) * (-(out_prob + 1e-8).log())
             cost_class = pos_cost_class[:, tgt_ids] - neg_cost_class[:, tgt_ids]
+        else:
+            raise NotImplementedError(f'support only ce_cost and focal_loss_cost, '
+                                      f'but got class_type {self.cost_class_type}')
 
         # Compute the L1 cost between boxes
-        cost_bbox = torch.cdist(out_bbox, tgt_bbox, p=1)
+        cost_bbox = ops.cdist(out_bbox, tgt_bbox, p=1.0)
 
         # Compute the giou cost betwen boxes
         cost_giou = -generalized_box_iou(box_cxcywh_to_xyxy(out_bbox), box_cxcywh_to_xyxy(tgt_bbox))
 
-        # Final cost matrix
-        C = self.cost_bbox * cost_bbox + self.cost_class * cost_class + self.cost_giou * cost_giou
-        C = C.view(bs, num_queries, -1).cpu()
+        # Final cost matrix, batch * batch
+        weighted_cost_matrix = self.cost_bbox * cost_bbox + self.cost_class * cost_class + self.cost_giou * cost_giou
+        # to check, .cpu() removed
+        weighted_cost_matrix = weighted_cost_matrix.view(bs, num_queries, -1)  # (bs, num_query, sum_instance)
 
-        sizes = [len(v["boxes"]) for v in targets]
-        indices = [linear_sum_assignment(c[i]) for i, c in enumerate(C.split(sizes, -1))]
-        return ops.stop_gradient([
-            (torch.as_tensor(i, dtype=torch.int64), torch.as_tensor(j, dtype=torch.int64)) for i, j in indices
-        ])
+        # hungarian matcher does not need gradient
+        weighted_cost_matrix = ops.stop_gradient(weighted_cost_matrix)
+
+        sizes = [len(v["boxes"]) for v in targets]  # [len(inst_0), len(inst_1), ...]
+        # two layer of index, the batch_i+batch_i is kept while batch_i+batch_other discarded
+        indices = [linear_sum_assignment(c[i].asnumpy()) for i, c in enumerate(weighted_cost_matrix.split(sizes, -1))]
+        return [
+            (Tensor(i, dtype=ms.int64), Tensor(j, dtype=ms.int64)) for i, j in indices
+        ]
 
     def __repr__(self, _repr_indent=4):
         head = "Matcher " + self.__class__.__name__

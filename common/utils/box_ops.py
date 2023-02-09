@@ -93,15 +93,41 @@ def box_scale(boxes, scale_x: float, scale_y: float) -> Tensor:
     return boxes
 
 
-def box_iou(boxes1, boxes2) -> Tuple[Tensor]:
+def box_intersection(boxes1, boxes2) -> Tensor:
+    """Modified from ``torchvision.ops.box_iou``
+
+    Return both intersection (Jaccard index).
+
+    Args:
+        boxes1: (Tensor[N, 4]): first set of boxes, in x1,y1,x2,y2 format (x2>=x1, y2>y1)
+        boxes2: (Tensor[M, 4]): second set of boxes, in x1,y1,x2,y2 format
+
+    Returns:
+        Tuple: A tuple of NxM matrix, with shape `(torch.Tensor[N, M], torch.Tensor[N, M])`,
+        containing the pairwise IoU and union values
+        for every element in boxes1 and boxes2.
+    """
+    assert (boxes1[:, 2:] >= boxes1[:, :2]).all()
+    assert (boxes2[:, 2:] >= boxes2[:, :2]).all()
+
+    lb = ops.maximum(boxes1[:, None, :2], boxes2[:, :2])  # left bottom [N,M,2]
+    rt = ops.minimum(boxes1[:, None, 2:], boxes2[:, 2:])  # right top [N,M,2]
+
+    wh = (rt - lb).clamp(min=0)  # [N,M,2]
+    inter = wh[:, :, 0] * wh[:, :, 1]  # [N,M]
+
+    return inter
+
+
+def box_iou(boxes1, boxes2) -> Tuple:
     """Modified from ``torchvision.ops.box_iou``
 
     Return both intersection-over-union (Jaccard index) and union between
     two sets of boxes.
 
     Args:
-        boxes1: (torch.Tensor[N, 4]): first set of boxes, in x1,y1,x2,y2 format
-        boxes2: (torch.Tensor[M, 4]): second set of boxes, in x1,y1,x2,y2 format
+        boxes1: (Tensor[N, 4]): first set of boxes, in x1,y1,x2,y2 format
+        boxes2: (Tensor[M, 4]): second set of boxes, in x1,y1,x2,y2 format
 
     Returns:
         Tuple: A tuple of NxM matrix, with shape `(torch.Tensor[N, M], torch.Tensor[N, M])`,
@@ -111,13 +137,9 @@ def box_iou(boxes1, boxes2) -> Tuple[Tensor]:
     area1 = box_area(boxes1)
     area2 = box_area(boxes2)
 
-    lt = ops.maximum(boxes1[:, None, :2], boxes2[None, :, :2])  # left right [N,M,2]
-    rb = ops.maximum(boxes1[:, None, 2:], boxes2[:, None, 2:])  # right bottom [N,M,2]
+    inter = box_intersection(boxes1, boxes2)
 
-    wh = (rb - lt).clamp(min=0)  # [N,M,2]
-    inter = wh[:, :, 0] * wh[:, :, 1]  # [N,M]
-
-    union = area1[:, None] + area2[:, None] - inter
+    union = area1[:, None] + area2[None, :] - inter
 
     iou = inter / (union + 1e-6)
     return iou, union
@@ -144,9 +166,9 @@ def generalized_box_iou(boxes1, boxes2) -> Tensor:
     assert (boxes2[:, 2:] >= boxes2[:, :2]).all()
     iou, union = box_iou(boxes1, boxes2)
 
-    lt = ops.min(boxes1[:, None, :2], boxes2[:, :2])
-    rb = ops.max(boxes1[:, None, 2:], boxes2[:, 2:])
-
+    # area of box minimum exterior rectangle (MER)
+    lt = ops.minimum(boxes1[:, None, :2], boxes2[:, :2])
+    rb = ops.maximum(boxes1[:, None, 2:], boxes2[:, 2:])
     wh = (rb - lt).clamp(min=0)  # [N,M,2]
     area = wh[:, :, 0] * wh[:, :, 1]
 
