@@ -1,4 +1,6 @@
 import mindspore as ms
+import mindspore.numpy as ms_np
+import numpy
 from mindspore import nn, ops, Tensor
 from scipy.optimize import linear_sum_assignment
 
@@ -88,8 +90,8 @@ class HungarianMatcher(nn.Cell):
         out_bbox = ops.reshape(outputs["pred_boxes"], (bs * num_queries, -1))  # [batch_size * num_queries, 4]
 
         # Also concat the target labels and boxes, flatten batch
-        tgt_ids = ops.cat([v["labels"] for v in targets])  # (sum_instance,)
-        tgt_bbox = ops.cat([v["boxes"] for v in targets])  # (sum_instance, 4)
+        tgt_ids = ops.concat([v["labels"] for v in targets])  # (sum_instance,)
+        tgt_bbox = ops.concat([v["boxes"] for v in targets])  # (sum_instance, 4)
 
         # Compute the classification cost.
         if self.cost_class_type == "ce_cost":
@@ -118,12 +120,15 @@ class HungarianMatcher(nn.Cell):
         # to check, .cpu() removed
         weighted_cost_matrix = weighted_cost_matrix.view(bs, num_queries, -1)  # (bs, num_query, sum_instance)
 
-        # hungarian matcher does not need gradient
+        # TODO to test, hungarian matcher does not need gradient
         weighted_cost_matrix = ops.stop_gradient(weighted_cost_matrix)
 
         sizes = [len(v["boxes"]) for v in targets]  # [len(inst_0), len(inst_1), ...]
+        split_sections = ops.cumsum(Tensor(sizes, dtype=ms.int32), axis=0)[:-1]
+        split_weights = ms_np.split(weighted_cost_matrix, [int(s) for s in split_sections], axis=-1)
+
         # two layer of index, the batch_i+batch_i is kept while batch_i+batch_other discarded
-        indices = [linear_sum_assignment(c[i].asnumpy()) for i, c in enumerate(weighted_cost_matrix.split(sizes, -1))]
+        indices = [linear_sum_assignment(c[i].asnumpy()) for i, c in enumerate(split_weights)]
         return [
             (Tensor(i, dtype=ms.int64), Tensor(j, dtype=ms.int64)) for i, j in indices
         ]

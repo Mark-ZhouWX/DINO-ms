@@ -9,7 +9,7 @@ def inverse_sigmoid(x, eps=1e-3):
         x (Tensor) : tensor within range 0,1
         eps (float) :
     """
-    x = x.clamp(min=0, max=1)
-    x1 = x.clamp(min=eps)
-    x2 = (1 - x).clamp(min=eps)
+    x = ops.clip_by_value(x, clip_value_min=0, clip_value_max=1)
+    x1 = ops.clip_by_value(x, clip_value_min=eps)
+    x2 = ops.clip_by_value(1 - x, clip_value_min=eps)
     return ops.log(x1 / x2)

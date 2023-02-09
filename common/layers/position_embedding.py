@@ -76,13 +76,13 @@ class PositionEmbeddingSine(nn.Cell):
 
         # use view as mmdet instead of flatten for dynamically exporting to ONNX
         B, H, W = mask.shape
-        pos_x = ops.stack((pos_x[:, :, :, 0::2].sin(), pos_x[:, :, :, 1::2].cos()), axis=4).view(
+        pos_x = ops.stack((ops.sin(pos_x[:, :, :, 0::2]), ops.cos(pos_x[:, :, :, 1::2])), axis=4).view(
             B, H, W, -1
         )
-        pos_y = ops.stack((pos_y[:, :, :, 0::2].sin(), pos_y[:, :, :, 1::2].cos()), axis=4).view(
+        pos_y = ops.stack((ops.sin(pos_y[:, :, :, 0::2]), ops.cos(pos_y[:, :, :, 1::2])), axis=4).view(
             B, H, W, -1
         )
-        pos = ops.cat((pos_y, pos_x), axis=3).permute(0, 3, 1, 2)
+        pos = ops.concat((pos_y, pos_x), axis=3).permute(0, 3, 1, 2)
         return pos
 
 
@@ -109,12 +109,12 @@ def get_sine_pos_embed(pos_tensor: Tensor, num_pos_feats: int = 128, temperature
 
     def sine_func(x: Tensor):
         sin_x = x * scale / dim_t
-        sin_x = ops.stack((sin_x[:, :, 0::2].sin(), sin_x[:, :, 1::2].cos()), axis=3)
+        sin_x = ops.stack((ops.sin(sin_x[:, :, 0::2]), ops.cos(sin_x[:, :, 1::2])), axis=3)
         sin_x = sin_x.reshape(sin_x.shape[0], sin_x.shape[1], -1)
         return sin_x
 
-    pos_res = [sine_func(x) for x in pos_tensor.split([1] * pos_tensor.shape[-1], axis=-1)]
+    pos_res = [sine_func(x) for x in pos_tensor.split(axis=-1, output_num=pos_tensor.shape[-1])]
     if exchange_xy:
         pos_res[0], pos_res[1] = pos_res[1], pos_res[0]
-    pos_res = ops.cat(pos_res, axis=2)
+    pos_res = ops.concat(pos_res, axis=2)
     return pos_res

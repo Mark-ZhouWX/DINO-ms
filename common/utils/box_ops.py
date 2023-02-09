@@ -76,10 +76,10 @@ def box_clip(boxes, clip_size: Tuple[int, int]) -> Tensor:
         clip_size (height, width): The clipping box's size.
     """
     h, w = clip_size
-    x1 = boxes[:, 0].clamp(min=0, max=w)
-    y1 = boxes[:, 1].clamp(min=0, max=h)
-    x2 = boxes[:, 2].clamp(min=0, max=w)
-    y2 = boxes[:, 3].clamp(min=0, max=h)
+    x1 = boxes[:, 0].clip(0, w)
+    y1 = boxes[:, 1].clip(0, h)
+    x2 = boxes[:, 2].clip(0, w)
+    y2 = boxes[:, 3].clip(0, h)
     boxes = ops.stack((x1, y1, x2, y2), axis=-1)
     return boxes
 
@@ -113,7 +113,7 @@ def box_intersection(boxes1, boxes2) -> Tensor:
     lb = ops.maximum(boxes1[:, None, :2], boxes2[:, :2])  # left bottom [N,M,2]
     rt = ops.minimum(boxes1[:, None, 2:], boxes2[:, 2:])  # right top [N,M,2]
 
-    wh = (rt - lb).clamp(min=0)  # [N,M,2]
+    wh = ops.clip_by_value((rt - lb), clip_value_min=0)  # [N,M,2]
     inter = wh[:, :, 0] * wh[:, :, 1]  # [N,M]
 
     return inter
@@ -169,7 +169,7 @@ def generalized_box_iou(boxes1, boxes2) -> Tensor:
     # area of box minimum exterior rectangle (MER)
     lt = ops.minimum(boxes1[:, None, :2], boxes2[:, :2])
     rb = ops.maximum(boxes1[:, None, 2:], boxes2[:, 2:])
-    wh = (rb - lt).clamp(min=0)  # [N,M,2]
+    wh = ops.clip_by_value((rb - lt), clip_value_min=0)  # [N,M,2]
     area = wh[:, :, 0] * wh[:, :, 1]
 
     return iou - (area - union) / (area + 1e-6)

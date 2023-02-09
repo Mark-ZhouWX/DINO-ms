@@ -95,7 +95,7 @@ class DINO(nn.Cell):
         # initialize weights
         prior_prob = 0.01
         bias_value = -math.log((1 - prior_prob) / prior_prob)
-        self.class_embed.bias.set_data(ops.ones(num_classes) * bias_value)
+        self.class_embed.bias.set_data(ops.ones(num_classes, self.class_embed.bias.dtype) * bias_value)
         bbox_last_layer_weight = self.bbox_embed.layers[-1].weight
         bbox_last_layer_weight.set_data(init.initializer(init.Constant(0),
                                                          bbox_last_layer_weight.shape, bbox_last_layer_weight.dtype))
@@ -135,6 +135,10 @@ class DINO(nn.Cell):
         if vis_period > 0:
             assert input_format is not None, "input_format is required for visualization"
 
+        # operator
+        self.uniform_real = ops.UniformReal()
+        self.uniform_int = ops.UniformInt()
+
     def construct(self, batched_inputs):
         """Forward function of `DINO` which excepts a list of dict as inputs.
 
@@ -168,12 +172,12 @@ class DINO(nn.Cell):
         batch_size, _, H, W = images.shape
 
         if self.training:
-            img_masks = images.new_ones((batch_size, H, W))
+            img_masks = ops.ones((batch_size, H, W), type=images.dtype)
             for img_id in range(batch_size):
                 img_h, img_w = batched_inputs[img_id]["instances"]['image_size']
                 img_masks[img_id, :img_h, : img_w] = 0
         else:
-            img_masks = images.new_zeros((batch_size, H, W))
+            img_masks = ops.zeros((batch_size, H, W), images.dtype)
 
         # extract features with backbone
         features = self.backbone(images)
@@ -315,13 +319,15 @@ class DINO(nn.Cell):
         # box_pred.shape: 1, 300, 4
         prob = box_cls.sigmoid()
         # TODO 不理解为什么如此选取topk，这样选取的bbox有许多重复的
+        # num_query*num_class must on the last axis
         # (bs, num_query, num_class) -> (bs, num_query*num_class) -> (bs, eval_num) + (bs, eval_num)
-        topk_values, topk_indexes_full = ops.topk(
-            prob.view(bs, -1), self.select_box_nums_for_evaluation, dim=1
+        topk_values, topk_indexes_full = ops.top_k(
+            prob.view(bs, -1), self.select_box_nums_for_evaluation
         )
         scores = topk_values
-
-        topk_boxes_ind = ops.div(topk_indexes_full, num_class, rounding_mode="floor")  # (bs, eval_num)
+        # (bs, eval_num)
+        topk_boxes_ind = ops.div(topk_indexes_full.astype(ms.float32),
+                                 num_class, rounding_mode="floor").astype(ms.int32)
 
         labels = topk_indexes_full % num_class  # (bs, eval_num)
         boxes = ops.gather_elements(box_pred, 1, ms_np.tile(topk_boxes_ind.unsqueeze(-1), (1, 1, 4)))  # (bs,eval_num,4)
@@ -333,7 +339,7 @@ class DINO(nn.Cell):
                 zip(scores, labels, boxes, image_sizes)
         ):
             result = dict(image_size=image_size)
-            # [num_query, 4]
+            # (num_query, 4)
             pred_boxes = box_cxcywh_to_xyxy(box_pred_per_image)
             pred_boxes[:, 0::2] *= image_size[1]
             pred_boxes[:, 1::2] *= image_size[0]
@@ -402,13 +408,13 @@ class DINO(nn.Cell):
             dn_number = 1
         # flattened labels, (sum(instance_i))
         # eg: [7,3,2, 6,8, 9,1,4,5]
-        labels = ops.cat([t["labels"] for t in targets])
+        labels = ops.concat([t["labels"] for t in targets])
         # flattened boxes (sum(instance_i), 4)
-        boxes = ops.cat([t["boxes"] for t in targets])
+        boxes = ops.concat([t["boxes"] for t in targets])
         # flattened batch_id
         # [0,0,0, 1,1, 2,2,2,2]
-        batch_idx = ops.cat(
-            [ops.full_like(t["labels"].long(), i) for i, t in enumerate(targets)]
+        batch_idx = ops.concat(
+            [ms_np.full_like(t["labels"].long(), i) for i, t in enumerate(targets)]
         )
 
         # (sum(instance_i) * 2 * dn_number)
@@ -423,14 +429,15 @@ class DINO(nn.Cell):
 
         if label_noise_ratio > 0:
             # (sum(instance_i) * 2 * dn_number)
-            p = ops.rand_like(known_labels_expaned.float())  # uniform(0,1)
+            p = self.uniform_real(known_labels_expaned.shape)  # uniform(0,1)
             # indice of lower p,
             chosen_indice = ops.nonzero(p < (label_noise_ratio * 0.5)).view(
                 -1
             )  # half of bbox prob
-            new_label = ops.randint_like(
-                chosen_indice, 0, num_classes
+            new_label = self.uniform_int(
+                chosen_indice.shape, Tensor(0, dtype=ms.int32), Tensor(num_classes, dtype=ms.int32)
             )  # randomly put a new label_id here
+            new_label = ops.cast(new_label, ms.int64)
             ops.tensor_scatter_elements(known_labels_expaned, indices=chosen_indice, updates=new_label, axis=0)
         single_padding = int(max(known_num))
 
@@ -454,13 +461,15 @@ class DINO(nn.Cell):
             diff[:, 2:] = known_bboxs[:, 2:] / 2
 
             # random 1 or -1
-            rand_sign = ops.cast((ops.randint_like(known_bboxs, low=0, high=2) * 2.0 - 1.0), ms.float32)
-            rand_part = ops.rand_like(known_bboxs)  # uniform(0,1)
+            rand_sign = ops.cast((self.uniform_int(
+                known_bboxs.shape, Tensor(0, ms.int32), Tensor(2, ms.int32)) * 2.0 - 1.0), ms.float32)
+            rand_part = self.uniform_real(known_bboxs.shape)  # uniform(0,1)
             # negative bbox has offset within (1, 2)*half_wh, positive has (0, 1)*half_wh
             rand_part[negative_idx] += 1.0
             rand_part *= rand_sign
             known_bbox_ = known_bbox_ + ops.mul(rand_part, diff) * box_noise_scale
-            known_bbox_ = known_bbox_.clamp(min=0.0, max=1.0)  # prevent out of image
+            known_bbox_ = ops.clip_by_value(known_bbox_, clip_value_min=0.0, clip_value_max=1.0)  # prevent out of image
+
             known_bbox_expand[:, :2] = (known_bbox_[:, :2] + known_bbox_[:, 2:]) / 2  # gaussion distribution
             known_bbox_expand[:, 2:] = known_bbox_[:, 2:] - known_bbox_[:, :2]
 
@@ -469,19 +478,19 @@ class DINO(nn.Cell):
         input_label_embed = label_enc(m)
         input_bbox_embed = inverse_sigmoid(known_bbox_expand)
 
-        padding_label = ops.zeros((pad_size, hidden_dim))
-        padding_bbox = ops.zeros((pad_size, 4))
+        padding_label = ms_np.zeros((pad_size, hidden_dim))
+        padding_bbox = ms_np.zeros((pad_size, 4))
 
         input_query_label = ms_np.tile(padding_label, (batch_size, 1, 1))
         input_query_bbox = ms_np.tile(padding_bbox, (batch_size, 1, 1))
 
         map_known_indice = ops.Tensor([])
         if len(known_num):
-            map_known_indice = ops.cat(
+            map_known_indice = ops.concat(
                 [ops.arange(end=num) for num in known_num]
             )  # eg:[0,1,2, 0,1, 0,1,2,3]
             # eg: [[0,1,2, 0,1, 0,1,2,3,    4,5,6, 4,5, 4,5,6,7,      8,9,10, 8,9, 8,9,10,11], ...] single_padding=4
-            map_known_indice = ops.cat(
+            map_known_indice = ops.concat(
                 [map_known_indice + single_padding * i for i in range(2 * dn_number)]
             ).long()
         if len(known_bid):
@@ -489,7 +498,7 @@ class DINO(nn.Cell):
             input_query_bbox[(known_bid.long(), map_known_indice)] = input_bbox_embed
 
         tgt_size = pad_size + num_queries
-        attn_mask = ops.ones((tgt_size, tgt_size)) < 0  # all false, means no mask
+        attn_mask = ops.ones((tgt_size, tgt_size), type=ms.float32) < 0  # all false, means no mask
         # match query cannot see gt query
         attn_mask[pad_size:, :pad_size] = True  # left bottom gray part of the figure in the paper
         # gt cannot see each other

@@ -113,12 +113,27 @@ inputs = [dict(image=Tensor.from_numpy(cv2.imread(image_path1)).transpose(2, 0, 
           dict(image=Tensor.from_numpy(cv2.imread(image_path2)).transpose(2, 0, 1),
                instances=dict(image_size=(400, 300), gt_classes=Tensor([21, 45, 9]),
                               gt_boxes=Tensor([[80, 220, 150, 320], [180, 100, 300, 200], [150, 150, 180, 180]])))]
-# infer
-# dino(inputs)
 
 
-# train
-dino.set_train()
-dino(inputs)
+if __name__ == "__main__":
+    train = False
+    infer = True
+    if infer:
+        dino.set_train(False)
+        inf_result = dino(inputs)
+        print('batch size', len(inf_result))
+        for r in inf_result:
+            r = r['instances']
+            print("image size", r['image_size'])
+            print("box shape", r['pred_boxes'].shape)
+            print("score shape", r['scores'].shape)
+            print("class shape", r['pred_classes'].shape)
 
-# train one step
+    if train:
+        # train
+        dino.set_train()
+        loss_dict = dino(inputs)
+        print(loss_dict)
+
+    # train one step
+    pass

@@ -29,7 +29,7 @@ class TwoStageCriterion(SetCriterion):
         )
         self.two_stage_binary_cls = two_stage_binary_cls
 
-    def forward(self, outputs, targets, **kwargs):
+    def construct(self, outputs, targets, **kwargs):
         """This performs the loss computation.
         Parameters:
              outputs: dict of tensors, see the output specification of the model for the format
@@ -50,7 +50,7 @@ class TwoStageCriterion(SetCriterion):
             ops.AllReduce(num_boxes)
 
         group_size = ms.communication.get_group_size() if ms.communication.GlobalComm.INITED else 1
-        num_boxes = ops.clamp(num_boxes / group_size, min=1).item()
+        num_boxes = int(ops.clip_by_value(num_boxes / group_size, clip_value_min=1))
 
         # Compute all the requested losses
         losses = {}
@@ -108,7 +108,7 @@ class DINOCriterion(TwoStageCriterion):
             ops.AllReduce(num_boxes)
 
         group_size = ms.communication.get_group_size() if ms.communication.GlobalComm.INITED else 1
-        num_boxes = ops.clamp(num_boxes / group_size, min=1).item()
+        num_boxes = int(ops.clip_by_value(num_boxes / group_size, clip_value_min=1))
 
         # Compute all the requested losses
         aux_num = 0

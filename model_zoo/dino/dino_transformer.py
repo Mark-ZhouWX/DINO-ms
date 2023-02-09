@@ -84,11 +84,11 @@ class DINOTransformer(nn.Cell):
             lvl_pos_embed_flatten.append(lvl_pos_embed)
             feat_flatten.append(feat)
             mask_flatten.append(mask)
-        feat_flatten = ops.cat(feat_flatten, 1)
-        mask_flatten = ops.cat(mask_flatten, 1)
-        lvl_pos_embed_flatten = ops.cat(lvl_pos_embed_flatten, 1)
+        feat_flatten = ops.concat(feat_flatten, 1)
+        mask_flatten = ops.concat(mask_flatten, 1)
+        lvl_pos_embed_flatten = ops.concat(lvl_pos_embed_flatten, 1)
         spatial_shapes = Tensor(spatial_shapes, dtype=ms.int64)
-        level_start_index = ops.cat((spatial_shapes.new_zeros((1,)), spatial_shapes.prod(1).cumsum(0)[:-1]))
+        level_start_index = ops.concat((ops.zeros((1,), spatial_shapes.dtype), spatial_shapes.prod(1).cumsum(0)[:-1]))
         # there may be slight difference of ratio values between different level due to of mask quantization
         valid_ratios = ops.stack([self.get_valid_ratio(m) for m in multi_level_masks], 1)  # (bs, num_level, 2)
 
@@ -133,15 +133,15 @@ class DINOTransformer(nn.Cell):
         # topk = 3
         # torch.max returns a tuple (value, index), mindspore.ops.max return a tensor (value)
 
-        topk_proposals = ops.topk(enc_outputs_class.max(-1), topk, dim=1)[1]  # (bs, k) , k=num_query
-
+        # k must be the last axis
+        topk_proposals = ops.top_k(enc_outputs_class.max(-1), topk)[1]  # index (bs, k) , k=num_query
         # extract region proposal boxes
         topk_coords_unact = ops.gather_elements(
             enc_outputs_coord_unact, 1, ms_np.tile(topk_proposals.unsqueeze(-1), (1, 1, 4)),
         )  # unsigmoided. (bs, k, 4)
         reference_points = ops.stop_gradient(topk_coords_unact).sigmoid()
         if query_embed[1] is not None:
-            reference_points = ops.cat([query_embed[1].sigmoid(), reference_points], 1)
+            reference_points = ops.concat([query_embed[1].sigmoid(), reference_points], 1)
         init_reference_out = reference_points
 
         # extract region features
@@ -155,7 +155,7 @@ class DINOTransformer(nn.Cell):
         else:
             target = ops.stop_gradient(target_unact)
         if query_embed[0] is not None:
-            target = ops.cat([query_embed[0], target], 1)
+            target = ops.concat([query_embed[0], target], 1)
 
         # decoder
         # (num_trans_layer, bs, num_query, embed_dim),   (num_trans_layer, bs, num_query, 4)
@@ -214,25 +214,25 @@ class DINOTransformer(nn.Cell):
             if mask_flatten_.dtype != ms.float_:
                 h_mask_not = ops.cast(h_mask_not, ms.float32)
                 w_mask_not = ops.cast(w_mask_not, ms.float32)
-            valid_h = ops.sum(h_mask_not, 1)  # (bs,)
-            valid_w = ops.sum(w_mask_not, 1)  # (bs,)
+            valid_h = h_mask_not.sum(1)  # (bs,)
+            valid_w = w_mask_not.sum(1)  # (bs,)
 
             grid_y, grid_x = ops.meshgrid(
-                ops.linspace(Tensor(0, dtype=ms.float32), Tensor(H - 1, dtype=ms.float32), H),
-                ops.linspace(Tensor(0, dtype=ms.float32), Tensor(W - 1, dtype=ms.float32), W), indexing='ij')  # (h, w)
+                (ops.linspace(Tensor(0, dtype=ms.float32), Tensor(H - 1, dtype=ms.float32), H),
+                ops.linspace(Tensor(0, dtype=ms.float32), Tensor(W - 1, dtype=ms.float32), W)), indexing='ij')  # (h, w)
 
-            grid = ops.cat([grid_x.expand_dims(-1), grid_y.expand_dims(-1)], -1)  # (h ,w, 2)
+            grid = ops.concat([grid_x.expand_dims(-1), grid_y.expand_dims(-1)], -1)  # (h ,w, 2)
 
-            scale = ops.cat([valid_w.expand_dims(-1), valid_h.expand_dims(-1)], 1).view(bs, 1, 1, 2)
+            scale = ops.concat([valid_w.expand_dims(-1), valid_h.expand_dims(-1)], 1).view(bs, 1, 1, 2)
             # (bs, h ,w, 2), normalized to valid range
             grid = (grid.expand_dims(0).broadcast_to((bs, -1, -1, -1)) + 0.5) / scale
-            hw = ops.ones_like(grid) * 0.05 * (2.0 ** lvl)  # preset wh, larger wh for higher level
-            proposal = ops.cat((grid, hw), -1).view(bs, -1, 4)  # (bs, hw, 4)
+            hw = ms_np.ones_like(grid) * 0.05 * (2.0 ** lvl)  # preset wh, larger wh for higher level
+            proposal = ops.concat((grid, hw), -1).view(bs, -1, 4)  # (bs, hw, 4)
             proposals.append(proposal)
             _cur += H * W
 
         # filter proposal
-        output_proposals = ops.cat(proposals, 1)  # (bs, sum(hw), 4)
+        output_proposals = ops.concat(proposals, 1)  # (bs, sum(hw), 4)
         # filter those whose centers are too close to the margin or wh too small or too large
         output_proposals_valid = ((output_proposals > 0.01) & (output_proposals < 0.99)).all(
             -1, keep_dims=True
@@ -270,16 +270,17 @@ class DINOTransformer(nn.Cell):
         for lvl, (H, W) in enumerate(spatial_shapes):
             #  TODO  check this 0.5
             ref_y, ref_x = ops.meshgrid(
-                ops.linspace(Tensor(0.5, dtype=ms.float32),
-                             Tensor(H - 0.5, dtype=ms.float32), H),
-                ops.linspace(Tensor(0.5, dtype=ms.float32),
-                             Tensor(W - 0.5, dtype=ms.float32), W),
+                (ops.linspace(Tensor(0.5, dtype=ms.float32),
+                              Tensor(H - 0.5, dtype=ms.float32), H),
+                 ops.linspace(Tensor(0.5, dtype=ms.float32),
+                              Tensor(W - 0.5, dtype=ms.float32), W)),
+                indexing='ij'
             )  # (h, w)
             ref_y = ref_y.reshape(-1)[None] / (valid_ratios[:, None, lvl, 1] * H)  # (bs, hw)
             ref_x = ref_x.reshape(-1)[None] / (valid_ratios[:, None, lvl, 0] * W)  # (bs, hw)
             ref = ops.stack((ref_x, ref_y), -1)  # (bs, hw, 2)
             reference_points_list.append(ref)
-        reference_points = ops.cat(reference_points_list, 1)  # (bs, sum(hw), 2)
+        reference_points = ops.concat(reference_points_list, 1)  # (bs, sum(hw), 2)
         reference_points = reference_points[:, :, None] * valid_ratios[:, None]  # (bs sum(hw), nl, 2)
         return reference_points
 
@@ -290,8 +291,8 @@ class DINOTransformer(nn.Cell):
         if mask.dtype != ms.float_:
             h_mask_not = ops.cast(h_mask_not, ms.float32)
             w_mask_not = ops.cast(w_mask_not, ms.float32)
-        valid_H = ops.sum(h_mask_not, 1)
-        valid_W = ops.sum(w_mask_not, 1)
+        valid_H = h_mask_not.sum(1)
+        valid_W = w_mask_not.sum(1)
         valid_ratio_h = valid_H.float() / H
         valid_ratio_w = valid_W.float() / W
         valid_ratio = ops.stack([valid_ratio_w, valid_ratio_h], -1)
@@ -449,7 +450,7 @@ class DINOTransformerDecoder(TransformerLayerSequence):
                 # (bs, num_query, num_level, 1) * (bs, 1, num_level, 4) -> (bs, num_query, num_level, 4)
                 reference_points_input = (
                         reference_points[:, :, None]
-                        * ops.cat([valid_ratios, valid_ratios], -1)[:, None]
+                        * ops.concat([valid_ratios, valid_ratios], -1)[:, None]
                 )
             else:
                 assert reference_points.shape[-1] == 2

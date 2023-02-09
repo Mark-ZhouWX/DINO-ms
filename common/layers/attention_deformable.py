@@ -77,7 +77,7 @@ class MultiScaleDeformableAttention(nn.Cell):
         pshape, dtype = self.sampling_offsets.weight.shape, self.sampling_offsets.weight.dtype
         self.sampling_offsets.weight.set_data(init.initializer('zeros', pshape, dtype))
         thetas = ops.arange(self.num_heads, dtype=ms.float32) * (2.0 * math.pi / self.num_heads)  # (num_head,)
-        grid_init = ops.stack([thetas.cos(), thetas.sin()], -1)  # (num_head, 2)
+        grid_init = ops.stack([ops.cos(thetas), ops.sin(thetas)], -1)  # (num_head, 2)
         grid_init = ms_np.tile(
             # (num_head, 1) -> (8, 1) -> (num_head, 2)
             (grid_init / grid_init.abs().max(-1, keepdims=True)[0])
@@ -227,7 +227,8 @@ def multi_scale_deformable_attn_pytorch(
 
     bs, _, num_heads, head_embed_dims = value.shape  # embed_dim is the one for head
     _, num_queries, num_heads, num_levels, num_points, _ = sampling_locations.shape
-    value_list = value.split([int(H_ * W_) for H_, W_ in value_spatial_shapes], axis=1)
+    indices_or_sections = ops.cumsum(value_spatial_shapes[:, 0] * value_spatial_shapes[:, 1], axis=0)[:-1]
+    value_list = ms_np.split(value, indices_or_sections=[int(i) for i in indices_or_sections], axis=1)
     sampling_grids = 2 * sampling_locations - 1
     sampling_value_list = []
     value_spatial_shapes_np = value_spatial_shapes.asnumpy()

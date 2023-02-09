@@ -1,6 +1,7 @@
 from typing import List
 
 import mindspore as ms
+import mindspore.numpy as ms_np
 from mindspore import nn, ops, Tensor
 
 from common.utils.box_ops import box_cxcywh_to_xyxy, generalized_box_iou
@@ -27,8 +28,8 @@ def sigmoid_focal_loss(inputs, targets, num_boxes, alpha: float = 0.25, gamma: f
     """
     prob = inputs.sigmoid()
     _, _, num_class = inputs.shape
-    weight = ops.ones(num_class, dtype=inputs.dtype)
-    pos_weight = ops.ones(num_class, dtype=inputs.dtype)
+    weight = ops.ones(num_class, type=inputs.dtype)
+    pos_weight = ops.ones(num_class, type=inputs.dtype)
     ce_loss = ops.binary_cross_entropy_with_logits(inputs, targets,
                                                    weight=weight, pos_weight=pos_weight, reduction="none")
     p_t = prob * targets + (1 - prob) * (1 - targets)
@@ -89,6 +90,7 @@ class SetCriterion(nn.Cell):
 
             # TODO to check whether this is ok
             self.empty_weight = empty_weight
+        self.l1_loss = nn.L1Loss(reduction="none")
 
     def loss_labels(self, outputs, targets, indices, num_boxes):
         """
@@ -105,9 +107,9 @@ class SetCriterion(nn.Cell):
         # Assign gt label to all queries, the label of 'no object' is num_class
         idx = self._get_src_permutation_idx(indices)  # tuple with batch_idx and query_idx
         # (sum_instance,) [3,4,   7,2,9]
-        target_classes_o = ops.cat([t["labels"][J] for t, (_, J) in zip(targets, indices)])
+        target_classes_o = ops.concat([t["labels"][J] for t, (_, J) in zip(targets, indices)])
         # (bs, num_query)  value=80
-        target_classes = ops.full((bs, num_query), self.num_classes, dtype=ms.int64)
+        target_classes = ms_np.full((bs, num_query), self.num_classes, dtype=ms.int64)
         target_classes[idx] = target_classes_o
 
         # Computation classification loss
@@ -117,7 +119,7 @@ class SetCriterion(nn.Cell):
         elif self.loss_class_type == "focal_loss":
             # src_logits: (b, num_queries, num_classes) = (2, 300, 80)
             # target_classes_one_hot = (2, 300, 80)
-            target_classes_onehot = ops.zeros((bs, num_query, num_class + 1))
+            target_classes_onehot = ops.zeros((bs, num_query, num_class + 1), ms.float32)
             ones = ops.ones_like(target_classes.unsqueeze(-1)).astype(ms.float32)
             target_classes_onehot = ops.tensor_scatter_elements(target_classes_onehot,
                                                                 target_classes.unsqueeze(-1), ones, axis=2)
@@ -155,9 +157,9 @@ class SetCriterion(nn.Cell):
         # outputs["pred_boxes"] (bs, num_query, 4)
         src_boxes = outputs["pred_boxes"][idx]
         # pick out target boxes
-        target_boxes = ops.cat([t["boxes"][i] for t, (_, i) in zip(targets, indices)], axis=0)
+        target_boxes = ops.concat([t["boxes"][i] for t, (_, i) in zip(targets, indices)], axis=0)
 
-        loss_bbox = ops.l1_loss(src_boxes, target_boxes, reduction="none")
+        loss_bbox = self.l1_loss(src_boxes, target_boxes)
 
         losses = {"loss_bbox": loss_bbox.sum() / num_boxes}
         # (sum_instance, 4) -> (sum_instance, sum_instance) -> (sum_instance, sum_instance, sum_instance, sum_instance)
@@ -174,9 +176,9 @@ class SetCriterion(nn.Cell):
     def _get_src_permutation_idx(self, indices):
         # permute predictions following indices
         # (sum_instance,) eg: [0,0,  1,1,1]
-        batch_idx = ops.cat([ops.full_like(src, i) for i, (src, _) in enumerate(indices)])
+        batch_idx = ops.concat([ms_np.full_like(src, i) for i, (src, _) in enumerate(indices)])
         # (sum_instance,) eg: [7,10, 3,6,8]
-        src_idx = ops.cat([src for (src, _) in indices])
+        src_idx = ops.concat([src for (src, _) in indices])
         return batch_idx, src_idx
 
     def get_loss(self, loss, outputs, targets, indices, num_boxes, **kwargs):
@@ -214,8 +216,7 @@ class SetCriterion(nn.Cell):
             ops.AllReduce(num_boxes)
 
         group_size = ms.communication.get_group_size() if ms.communication.GlobalComm.INITED else 1
-        num_boxes = ops.clamp(num_boxes / group_size, min=1).item()
-
+        num_boxes = int(ops.clip_by_value(num_boxes / group_size, clip_value_min=1))
         # Compute all the requested losses
         losses = {}
         for loss in self.losses:
