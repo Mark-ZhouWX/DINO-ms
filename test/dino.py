@@ -100,7 +100,7 @@ dino = DINO(backbone,
             pixel_std=[58.395, 57.120, 57.375],
             select_box_nums_for_evaluation=300,
             dn_number=100,
-            label_noise_ratio=0,
+            label_noise_ratio=0.2,
             box_noise_scale=1.0,
             )
 

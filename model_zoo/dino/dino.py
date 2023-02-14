@@ -165,7 +165,7 @@ class DINO(nn.Cell):
                 - dict["aux_outputs"]: Optional, only returned when auxilary losses are activated. It is a list of
                             dictionnaries containing the two above keys for each decoder layer.
         """
-        if False:
+        if True:
             # pad images in the batch to the same size (max image size in the batch)
             images, unpad_img_sizes = self.preprocess_image(batched_inputs)  # tensor (b, c, h, w)
 
@@ -481,10 +481,6 @@ class DINO(nn.Cell):
             rand_sign = ops.cast((self.uniform_int(
                 known_bboxs.shape, Tensor(0, ms.int32), Tensor(2, ms.int32)) * 2.0 - 1.0), ms.float32)
             rand_part = self.uniform_real(known_bboxs.shape)  # uniform(0,1)
-
-            # TODO delete, for debug
-            rand_sign = ms_np.tile(Tensor([1, -1, 1, -1]).reshape(1, 4), (330, 1))
-            rand_part = ms_np.tile(Tensor([0, 0.3, 0.6, 0.9]).reshape(1, 4), (330, 1))
 
             # negative bbox has offset within (1, 2)*half_wh, positive has (0, 1)*half_wh
             rand_part[negative_idx] += 1.0
