@@ -84,11 +84,9 @@ class SetCriterion(nn.Cell):
         ], "only support ce loss and focal loss for computing classification loss"
 
         if self.loss_class_type == "ce_loss":
-            empty_weight = ops.ones(self.num_classes + 1)
+            empty_weight = ms.Parameter(ops.ones(self.num_classes + 1, ms.float32), requires_grad=False)
             empty_weight[-1] = eos_coef
             # self.register_buffer("empty_weight", empty_weight)
-
-            # TODO to check whether this is ok
             self.empty_weight = empty_weight
         self.l1_loss = nn.L1Loss(reduction="none")
 
@@ -162,13 +160,9 @@ class SetCriterion(nn.Cell):
         loss_bbox = self.l1_loss(src_boxes, target_boxes)
 
         losses = {"loss_bbox": loss_bbox.sum() / num_boxes}
-        # (sum_instance, 4) -> (sum_instance, sum_instance) -> (sum_instance, sum_instance, sum_instance, sum_instance)
-        loss_giou = 1 - ops.diag(
-            generalized_box_iou(
-                box_cxcywh_to_xyxy(src_boxes),
-                box_cxcywh_to_xyxy(target_boxes),
-            )
-        )
+        # (sum_instance, 4) -> (sum_instance, sum_instance) -> (sum_instance,)
+        loss_giou = 1 - generalized_box_iou(box_cxcywh_to_xyxy(src_boxes), box_cxcywh_to_xyxy(target_boxes)).diagonal()
+
         losses["loss_giou"] = loss_giou.sum() / num_boxes
 
         return losses

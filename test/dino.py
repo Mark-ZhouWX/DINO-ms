@@ -100,26 +100,38 @@ dino = DINO(backbone,
             pixel_std=[58.395, 57.120, 57.375],
             select_box_nums_for_evaluation=300,
             dn_number=100,
-            label_noise_ratio=0.2,
+            label_noise_ratio=0,
             box_noise_scale=1.0,
             )
 
 # test inference runtime
-image_root = r"C:\02Data\demo\image" if is_windows else '/data/zhouwuxing/demo/'
+image_root = r"C:\02Data\demo\image" if is_windows else '/data1/zhouwuxing/demo/'
 image_path1 = os.path.join(image_root, 'hrnet_demo.jpg')
 image_path2 = os.path.join(image_root, 'road554.png')
+image_path3 = os.path.join(image_root, 'orange_71.jpg')
 
 inputs = [dict(image=Tensor.from_numpy(cv2.imread(image_path1)).transpose(2, 0, 1),
                instances=dict(image_size=(423, 359), gt_classes=Tensor([3, 7]),
                               gt_boxes=Tensor([[100, 200, 210, 300], [50, 100, 90, 150]]))),
           dict(image=Tensor.from_numpy(cv2.imread(image_path2)).transpose(2, 0, 1),
                instances=dict(image_size=(400, 300), gt_classes=Tensor([21, 45, 9]),
-                              gt_boxes=Tensor([[80, 220, 150, 320], [180, 100, 300, 200], [150, 150, 180, 180]])))]
+                              gt_boxes=Tensor([[80, 220, 150, 320], [180, 100, 300, 200], [150, 150, 180, 180]]))),
+          # dict(image=Tensor.from_numpy(cv2.imread(image_path3)).transpose(2, 0, 1),
+          #      instances=dict(image_size=(1249, 1400), gt_classes=Tensor([3, 7]),
+          #                     gt_boxes=Tensor([[100, 200, 210, 300], [50, 100, 90, 150]]))),
+          ]
 
 
 if __name__ == "__main__":
-    train = False
-    infer = True
+    train = True
+    infer = False
+
+    pth_dir = r"C:\02Data\models" if is_windows else '/data/zhouwuxing/pretrained_model/'
+    pth_path = os.path.join(pth_dir, "dino_r50_4scale_12ep_49_2AP.pth")
+    ms_pth_path = os.path.join(pth_dir, "ms_dino_r50_4scale_12ep_49_2AP.ckpt")
+
+    ms.load_checkpoint(ms_pth_path, dino)
+
     if infer:
         dino.set_train(False)
         inf_result = dino(inputs)
@@ -133,9 +145,10 @@ if __name__ == "__main__":
 
     if train:
         # train
-        dino.set_train()
+        dino.set_train(True)
         loss_dict = dino(inputs)
-        print(loss_dict)
+        for key, value in loss_dict.items():
+            print(key, value)
 
     # train one step
     pass

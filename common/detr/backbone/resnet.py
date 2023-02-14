@@ -216,7 +216,6 @@ class ResNet(nn.Cell):
         self.layer4 = self._make_layer(block, 512, layers[3], stride=2)
 
         self.num_features = 512 * block.expansion
-        self.classifier = nn.Dense(self.num_features, num_classes)
 
     def _make_layer(self,
                     block: Type[Union[BasicBlock, Bottleneck]],
@@ -266,7 +265,8 @@ class ResNet(nn.Cell):
         x = self.bn1(x)
         out1 = self.relu(x)
 
-        x = self.max_pool(out1)
+        x = self.max_pool(out1)  # different from torch in padding
+
         out2 = self.layer1(x)
 
         out3 = self.layer2(out2)

@@ -2,7 +2,9 @@ import warnings
 from typing import Optional
 
 import mindspore as ms
+import mindspore.numpy as ms_np
 from mindspore import nn, ops, Tensor
+import mindspore.common.initializer as init
 
 
 class Attention(nn.Cell):
@@ -97,11 +99,22 @@ class MultiheadAttention(nn.Cell):
         self.attn_drop = nn.Dropout(keep_prob=1 - attn_drop)
         self.out_drop = nn.Dropout(keep_prob=1 - proj_drop)
 
-        self.out_project = nn.Dense(embed_dim, embed_dim)
+        # proj qkv, separately reference : torch.MultiHeadAttention
+        # self.in_proj_weight = ms.Parameter(init.initializer(init.XavierUniform,
+        #                                                     dtype=ms.float32, shape=(embed_dim * 3, embed_dim)))
+        # self.in_proj_bias = ms.Parameter(init.initializer(init.Constant,
+        #                                                   dtype=ms.float32, shape=(embed_dim * 3)))
+        self.in_projs = nn.CellList([nn.Dense(embed_dim, embed_dim),
+                                    nn.Dense(embed_dim, embed_dim), nn.Dense(embed_dim, embed_dim)])
+        self.out_proj = nn.Dense(embed_dim, embed_dim)  # proj z
 
         self.head_dim = embed_dim // num_heads
 
         self.softmax_scale = Tensor(self.head_dim ** -0.5)
+
+    def init_weights(self):
+        # TODO init weight for MSA
+        pass
 
     def construct(
             self,
@@ -169,11 +182,21 @@ class MultiheadAttention(nn.Cell):
         _, num_value, _ = value.shape
         assert num_value == num_key
 
-        query = ops.reshape(query, (bs, self.num_heads, num_query, self.head_dim))
-        key = ops.reshape(key, (bs, self.num_heads, num_key, self.head_dim))
-        value = ops.reshape(key, (bs, self.num_heads, num_key, self.head_dim))
+        query, key, value = [self.in_projs[i](t) for i, t in enumerate([query, key, value])]
+        query = query.reshape(bs, num_query, self.num_heads, self.head_dim)
+        key = key.reshape(bs, num_key, self.num_heads, self.head_dim)
+        value = value.reshape(bs, num_key, self.num_heads, self.head_dim)
+        # query = ops.reshape(query, (bs, self.num_heads, num_query, self.head_dim))
+        # key = ops.reshape(key, (bs, self.num_heads, num_key, self.head_dim))
+        # value = ops.reshape(value, (bs, self.num_heads, num_key, self.head_dim))
+
+        # (bs, num_query, num_head, head_dim) -> (bs, num_head, num_query, head_dim)
+        query, key, value = ops.transpose(query, (0, 2, 1, 3)), \
+            ops.transpose(key, (0, 2, 1, 3)), ops.transpose(value, (0, 2, 1, 3))
+
         attn_output_weights = ops.BatchMatMul(transpose_b=True)(query, key)  # (bs, num_head, num_query, num_key)
         attn_output_weights = ops.mul(attn_output_weights, self.softmax_scale)
+
         if attn_mask is not None:
             if attn_mask.dtype != ms.bool_:
                 raise ValueError(f'attention mask type should be bool, but got {attn_mask.dtype} instead')
@@ -192,7 +215,7 @@ class MultiheadAttention(nn.Cell):
         out = ops.BatchMatMul()(attn, value)  # (bs, num_head, num_query, head_dim)
         out = ops.transpose(out, (0, 2, 1, 3))  # (bs, num_query, num_head, head_dim)
         out = ops.reshape(out, (bs, num_query, self.embed_dim))
-        out = self.out_project(out)
+        out = self.out_proj(out)
         out = self.out_drop(out)
 
         return identity + out

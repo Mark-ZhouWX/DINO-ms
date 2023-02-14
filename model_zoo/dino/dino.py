@@ -2,6 +2,7 @@ import copy
 import math
 from typing import List, Optional
 
+import cv2
 import mindspore as ms
 from mindspore import nn, ops, Tensor
 import mindspore.common.initializer as init
@@ -164,23 +165,39 @@ class DINO(nn.Cell):
                 - dict["aux_outputs"]: Optional, only returned when auxilary losses are activated. It is a list of
                             dictionnaries containing the two above keys for each decoder layer.
         """
-        # pad images in the batch to the same size (max image size in the batch)
-        images, unpad_img_sizes = self.preprocess_image(batched_inputs)  # tensor (b, c, h, w)
+        if False:
+            # pad images in the batch to the same size (max image size in the batch)
+            images, unpad_img_sizes = self.preprocess_image(batched_inputs)  # tensor (b, c, h, w)
 
-        # calculate input mask,
-        # TODO only training model need mask， 此处不理解，mask不会影响inference吗，看下其他的代码参考下
-        batch_size, _, H, W = images.shape
+            # calculate input mask,
+            # TODO only training model need mask， 此处不理解，mask不会影响inference吗，看下其他的代码参考下
+            batch_size, _, H, W = images.shape
 
-        if self.training:
-            img_masks = ops.ones((batch_size, H, W), type=images.dtype)
-            for img_id in range(batch_size):
-                img_h, img_w = batched_inputs[img_id]["instances"]['image_size']
-                img_masks[img_id, :img_h, : img_w] = 0
-        else:
-            img_masks = ops.zeros((batch_size, H, W), images.dtype)
+            if self.training:
+                img_masks = ops.ones((batch_size, H, W), type=images.dtype)
+                for img_id in range(batch_size):
+                    img_h, img_w = batched_inputs[img_id]["instances"]['image_size']
+                    img_masks[img_id, :img_h, : img_w] = 0
+            else:
+                img_masks = ops.zeros((batch_size, H, W), images.dtype)
 
-        # extract features with backbone
-        features = self.backbone(images)
+            # extract features with backbone
+            features = self.backbone(images)
+
+        else:  # test inference without backbone
+            features = dict(
+                res3=ops.ones((2, 512, 53, 45), ms.float32),
+                res4=ops.ones((2, 1024, 27, 23), ms.float32),
+                res5=ops.ones((2, 2048, 14, 12), ms.float32)
+            )
+            img_masks = ops.zeros((2, 423, 359), ms.float32)
+            unpad_img_sizes = Tensor([(423, 359), (400, 300)])
+            batched_inputs = [dict(instances=dict(image_size=(423, 359), gt_classes=Tensor([3, 7]),
+                                                  gt_boxes=Tensor([[100, 200, 210, 300], [50, 100, 90, 150]]))),
+                              dict(instances=dict(image_size=(400, 300), gt_classes=Tensor([21, 45, 9]),
+                                                  gt_boxes=Tensor([[80, 220, 150, 320], [180, 100, 300, 200],
+                                                                   [150, 150, 180, 180]]))),
+                              ]
 
         # model_zoo backbone features to the embed dimension of transformer
         multi_level_feats = self.neck(features)  # list[b, embed_dim, h, w], len=num_level
@@ -366,15 +383,15 @@ class DINO(nn.Cell):
         return outputs_class, outputs_coord
 
     def prepare_for_cdn(
-        self,
-        targets,
-        dn_number,
-        label_noise_ratio,
-        box_noise_scale,
-        num_queries,
-        num_classes,
-        hidden_dim,
-        label_enc,
+            self,
+            targets,
+            dn_number,
+            label_noise_ratio,
+            box_noise_scale,
+            num_queries,
+            num_classes,
+            hidden_dim,
+            label_enc,
     ):
         """
         A major difference of DINO from DN-DETR is that the author process pattern embedding
@@ -464,6 +481,11 @@ class DINO(nn.Cell):
             rand_sign = ops.cast((self.uniform_int(
                 known_bboxs.shape, Tensor(0, ms.int32), Tensor(2, ms.int32)) * 2.0 - 1.0), ms.float32)
             rand_part = self.uniform_real(known_bboxs.shape)  # uniform(0,1)
+
+            # TODO delete, for debug
+            rand_sign = ms_np.tile(Tensor([1, -1, 1, -1]).reshape(1, 4), (330, 1))
+            rand_part = ms_np.tile(Tensor([0, 0.3, 0.6, 0.9]).reshape(1, 4), (330, 1))
+
             # negative bbox has offset within (1, 2)*half_wh, positive has (0, 1)*half_wh
             rand_part[negative_idx] += 1.0
             rand_part *= rand_sign
@@ -505,20 +527,20 @@ class DINO(nn.Cell):
         for i in range(dn_number):
             if i == 0:
                 attn_mask[
-                    single_padding * 2 * i: single_padding * 2 * (i + 1),
-                    single_padding * 2 * (i + 1): pad_size,
+                single_padding * 2 * i: single_padding * 2 * (i + 1),
+                single_padding * 2 * (i + 1): pad_size,
                 ] = True
             if i == dn_number - 1:
                 attn_mask[single_padding * 2 * i: single_padding * 2 * (i + 1), : single_padding * i * 2] = True
             else:
                 # gt queries after the i-th gt query
                 attn_mask[
-                    single_padding * 2 * i: single_padding * 2 * (i + 1),
-                    single_padding * 2 * (i + 1): pad_size,
+                single_padding * 2 * i: single_padding * 2 * (i + 1),
+                single_padding * 2 * (i + 1): pad_size,
                 ] = True
                 # # gt queries before the i-th gt query
                 attn_mask[
-                    single_padding * 2 * i: single_padding * 2 * (i + 1), : single_padding * 2 * i
+                single_padding * 2 * i: single_padding * 2 * (i + 1), : single_padding * 2 * i
                 ] = True
 
         dn_meta = {

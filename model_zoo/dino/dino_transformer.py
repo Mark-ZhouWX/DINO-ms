@@ -475,7 +475,7 @@ class DINOTransformerDecoder(TransformerLayerSequence):
             )
 
             if self.bbox_embed is not None:
-                tmp = self.bbox_embed[layer_idx](output)
+                tmp = self.bbox_embed[layer_idx](output)  # TODO 此处开始出现累计误差 0.7113 -> 0.7116
                 if reference_points.shape[-1] == 4:
                     new_reference_points = tmp + inverse_sigmoid(reference_points)
                     new_reference_points = new_reference_points.sigmoid()
