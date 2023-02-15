@@ -140,20 +140,12 @@ class DINO(nn.Cell):
         self.uniform_real = ops.UniformReal()
         self.uniform_int = ops.UniformInt()
 
-    def construct(self, batched_inputs):
+    def construct(self, images, img_masks, *args):
         """Forward function of `DINO` which excepts a list of dict as inputs.
 
         Args:
-            batched_inputs (List[dict]): A list of instance dict, and each instance dict must consists of:
-                - dict["image"] (torch.Tensor): The unnormalized image tensor.
-                - dict["height"] (int): The original image height.
-                - dict["width"] (int): The original image width.
-                - dict["instance"] (detectron2.structures.Instances):
-                    Image meta information and ground truth boxes and labels during training.
-                    Please refer to
-                    https://detectron2.readthedocs.io/en/latest/modules/structures.html#detectron2.structures.Instances
-                    for the basic usage of Instances.
-
+            images (Tensor[b, c, h, w]): batch image
+            img_masks (Tensor(b, h, w)): image masks with value 1 for padding area and 0 for valid area
         Returns:
             dict: Returns a dict with the following elements:
                 - dict["pred_logits"]: the classification logits for all queries (anchor boxes in DAB-DETR).
@@ -166,20 +158,17 @@ class DINO(nn.Cell):
                             dictionnaries containing the two above keys for each decoder layer.
         """
         if True:
-            # pad images in the batch to the same size (max image size in the batch)
-            images, unpad_img_sizes = self.preprocess_image(batched_inputs)  # tensor (b, c, h, w)
-
-            # calculate input mask,
-            # TODO only training model need mask， 此处不理解，mask不会影响inference吗，看下其他的代码参考下
-            batch_size, _, H, W = images.shape
 
             if self.training:
-                img_masks = ops.ones((batch_size, H, W), type=images.dtype)
-                for img_id in range(batch_size):
-                    img_h, img_w = batched_inputs[img_id]["instances"]['image_size']
-                    img_masks[img_id, :img_h, : img_w] = 0
+                # boxes already normalized to (0,1) in dataset
+                gt_bboxes, gt_labels, gt_valids = args[0], args[1], args[2]
+                # convert list to dict
+                targets = self.prepare_targets(gt_bboxes, gt_labels, gt_valids)
             else:
-                img_masks = ops.zeros((batch_size, H, W), images.dtype)
+                batch_size, _, h, w = images.shape
+                # TODO only training model need mask， 此处不理不解，mask会影响inference吗，看下其他的代码参考下
+                img_masks = ops.zeros((batch_size, h, w), images.dtype)
+                targets = None
 
             # extract features with backbone
             features = self.backbone(images)
@@ -213,8 +202,6 @@ class DINO(nn.Cell):
         # de-noising preprocessing
         # prepare label query embeding
         if self.training:
-            gt_instances = [x["instances"] for x in batched_inputs]
-            targets = self.prepare_targets(gt_instances)
             input_query_label, input_query_bbox, attn_mask, dn_meta = self.prepare_for_cdn(
                 targets,
                 dn_number=self.dn_number,
@@ -226,7 +213,6 @@ class DINO(nn.Cell):
                 label_enc=self.label_enc,
             )
         else:
-            targets = None
             # inference does not need dn
             input_query_label, input_query_bbox, attn_mask, dn_meta = None, None, None, None
         query_embeds = (input_query_label, input_query_bbox)
@@ -300,8 +286,10 @@ class DINO(nn.Cell):
             for k in loss_dict.keys():
                 if k in weight_dict:
                     loss_dict[k] *= weight_dict[k]
-            return loss_dict
+            loss = sum(loss_dict.values())
+            return loss
         else:
+            # TODO output score bbox(normalized) and label
             box_cls = output["pred_logits"]
             box_pred = output["pred_boxes"]
             results = self.inference(box_cls, box_pred, unpad_img_sizes)
@@ -454,7 +442,7 @@ class DINO(nn.Cell):
             new_label = self.uniform_int(
                 chosen_indice.shape, Tensor(0, dtype=ms.int32), Tensor(num_classes, dtype=ms.int32)
             )  # randomly put a new label_id here
-            new_label = ops.cast(new_label, ms.int64)
+            # new_label = ops.cast(new_label, ms.int64)
             ops.tensor_scatter_elements(known_labels_expaned, indices=chosen_indice, updates=new_label, axis=0)
         single_padding = int(max(known_num))
 
@@ -549,19 +537,20 @@ class DINO(nn.Cell):
         return input_query_label, input_query_bbox, attn_mask, dn_meta
 
     def preprocess_image(self, batched_inputs):
-        images = [self.normalizer(x["image"]) for x in batched_inputs]
-        images = pad_as_batch(images)
-        return images
+        images = batched_inputs['image']
+        img_masks = batched_inputs['mask']
+        gt_bboxes = batched_inputs['boxes']
+        gt_labels = batched_inputs['labels']
+        gt_masks = batched_inputs['valid']
+        return images, img_masks, gt_bboxes, gt_labels, gt_masks
 
-    def prepare_targets(self, targets):
+    def prepare_targets(self, gt_bboxes, gt_labels, gt_valids):
         new_targets = []
-        for targets_per_image in targets:
-            h, w = targets_per_image['image_size']
-            image_size_xyxy = Tensor([w, h, w, h], dtype=ms.float32)
-            gt_classes = targets_per_image['gt_classes']
-            gt_boxes = targets_per_image['gt_boxes'] / image_size_xyxy  # with reference to valid w,h
-            gt_boxes = box_xyxy_to_cxcywh(gt_boxes)
-            new_targets.append({"labels": gt_classes, "boxes": gt_boxes})
+        bs = len(gt_labels)
+        for i in range(bs):
+            new_targets.append({"labels": ops.masked_select(gt_labels[i], gt_valids[i]),
+                                "boxes": ops.masked_select(gt_bboxes[i], gt_valids[i][:, None]).reshape(-1, 4)})
+
         return new_targets
 
     def _set_aux_loss(self, outputs_class, outputs_coord):

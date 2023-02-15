@@ -16,6 +16,7 @@ from test import is_windows
 # set context
 ms.set_context(mode=ms.PYNATIVE_MODE, device_target='CPU')
 
+num_classes = 91
 # build model
 backbone = resnet50(
     in_channels=3,
@@ -65,7 +66,7 @@ transformer = DINOTransformer(
 )
 
 criterion = DINOCriterion(
-    num_classes=80,
+    num_classes=num_classes,
     matcher=HungarianMatcher(
         cost_class=2.0,
         cost_bbox=5.0,
@@ -92,7 +93,7 @@ dino = DINO(backbone,
             neck,
             transformer,
             embed_dim=256,
-            num_classes=80,
+            num_classes=num_classes,
             num_queries=900,
             aux_loss=True,
             criterion=criterion,
