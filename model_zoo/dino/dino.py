@@ -187,6 +187,7 @@ class DINO(nn.Cell):
                                                   gt_boxes=Tensor([[80, 220, 150, 320], [180, 100, 300, 200],
                                                                    [150, 150, 180, 180]]))),
                               ]
+            targets = None
 
         # model_zoo backbone features to the embed dimension of transformer
         multi_level_feats = self.neck(features)  # list[b, embed_dim, h, w], len=num_level

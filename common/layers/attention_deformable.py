@@ -198,7 +198,7 @@ class MultiScaleDeformableAttention(nn.Cell):
             raise ValueError(
                 "Last dim of reference_points must be 2 or 4, but get {} instead.".format(reference_points.shape[-1])
             )
-        if ms.get_context('device_target') in {'GPU', 'Ascend'}:
+        if False and ms.get_context('device_target') in {'GPU', 'Ascend'}:
             # TODO apply cuda version deform-attn
             output = MultiScaleDeformableAttnFunction.apply(
                 value,
@@ -231,7 +231,8 @@ def multi_scale_deformable_attn_pytorch(
     value_list = ms_np.split(value, indices_or_sections=[int(i) for i in indices_or_sections], axis=1)
     sampling_grids = 2 * sampling_locations - 1
     sampling_value_list = []
-    for level, (H_, W_) in enumerate(value_spatial_shapes):
+    value_spatial_shapes_list = value_spatial_shapes.asnumpy().tolist()
+    for level, (H_, W_) in enumerate(value_spatial_shapes_list):
         H_, W_ = int(H_), int(W_)
         # bs, H_*W_, num_heads, head_embed_dims ->
         # bs, H_*W_, num_heads*head_embed_dims ->
