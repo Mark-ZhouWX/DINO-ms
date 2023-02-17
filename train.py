@@ -44,9 +44,9 @@ if __name__ == '__main__':
         ds_size = dataset.get_dataset_size()
         for s_id, in_data in enumerate(dataset.create_dict_iterator()):
             # image, img_mask(1 for padl), gt_box, gt_label, gt_valid(True for valid)
-            loss, _, _ = model(in_data['image'], in_data['mask'], in_data['boxes'], in_data['labels'], in_data['valid'])
+            loss = model(in_data['image'], in_data['mask'], in_data['boxes'], in_data['labels'], in_data['valid'])
             now = datetime.now().strftime("%Y-%m-%d - %H:%M:%S")
-            # if s_id % log_loss_step == 0:l
-            print(f"time[{now}] epoch[{e_id}/{epoch_num}] step[{s_id}/{ds_size}], "
-                  f"loss[{loss.asnumpy()}]]")
+            if s_id % log_loss_step == 0:
+                print(f"time[{now}] epoch[{e_id}/{epoch_num}] step[{s_id}/{ds_size}], "
+                      f"loss[{loss.asnumpy()}]")
     print(f'finish training for dino')

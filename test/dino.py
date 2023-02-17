@@ -14,9 +14,10 @@ from model_zoo.dino.dn_criterion import DINOCriterion
 from test import is_windows
 
 # set context
-ms.set_context(mode=ms.PYNATIVE_MODE, device_target='CPU')
+ms.set_context(mode=ms.PYNATIVE_MODE, device_target='GPU')
 
 num_classes = 91
+num_queries = 900
 # build model
 backbone = resnet50(
     in_channels=3,
@@ -62,7 +63,7 @@ transformer = DINOTransformer(
         num_feature_levels=4,
     ),
     num_feature_levels=4,
-    two_stage_num_proposals=900,
+    two_stage_num_proposals=num_queries,
 )
 
 criterion = DINOCriterion(
@@ -94,7 +95,7 @@ dino = DINO(backbone,
             transformer,
             embed_dim=256,
             num_classes=num_classes,
-            num_queries=900,
+            num_queries=num_queries,
             aux_loss=True,
             criterion=criterion,
             pixel_mean=[123.675, 116.280, 103.530],
