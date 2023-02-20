@@ -12,7 +12,7 @@ from config import config
 
 if __name__ == '__main__':
     # set context, seed
-    context.set_context(mode=context.PYNATIVE_MODE, device_target='CPU', pynative_synchronize=True)
+    context.set_context(mode=context.PYNATIVE_MODE, device_target='GPU', pynative_synchronize=False)
     set_seed(0)
     rank = 0
     device_num = 1
@@ -47,6 +47,6 @@ if __name__ == '__main__':
             loss = model(in_data['image'], in_data['mask'], in_data['boxes'], in_data['labels'], in_data['valid'])
             now = datetime.now().strftime("%Y-%m-%d - %H:%M:%S")
             if s_id % log_loss_step == 0:
-                print(f"time[{now}] epoch[{e_id}/{epoch_num}] step[{s_id}/{ds_size}], "
-                      f"loss[{loss.asnumpy()}]")
+                print(f"[{now}] epoch[{e_id}/{epoch_num}] step[{s_id}/{ds_size}], "
+                      f"loss[{loss.asnumpy():.3f}]")
     print(f'finish training for dino')
