@@ -16,7 +16,7 @@ from model_zoo.dino.dn_criterion import DINOCriterion
 from test import is_windows
 
 # set context
-ms.set_context(mode=ms.PYNATIVE_MODE, device_target='GPU')
+ms.set_context(mode=ms.PYNATIVE_MODE, device_target='CPU' if is_windows else 'GPU')
 
 num_classes = 80
 num_queries = 900
@@ -115,10 +115,10 @@ image_path2 = os.path.join(image_root, 'road554.png')
 image_path3 = os.path.join(image_root, 'orange_71.jpg')
 
 inputs = [dict(image=Tensor.from_numpy(cv2.imread(image_path1)).transpose(2, 0, 1),
-               instances=dict(image_size=(423, 359), gt_classes=Tensor([3, 7]),
+               instances=dict(image_size=(423, 359), gt_classes=Tensor([3, 7], ms.int32),
                               gt_boxes=Tensor([[100, 200, 210, 300], [50, 100, 90, 150]]))),
           dict(image=Tensor.from_numpy(cv2.imread(image_path2)).transpose(2, 0, 1),
-               instances=dict(image_size=(400, 300), gt_classes=Tensor([21, 45, 9]),
+               instances=dict(image_size=(400, 300), gt_classes=Tensor([21, 45, 9], ms.int32),
                               gt_boxes=Tensor([[80, 220, 150, 320], [180, 100, 300, 200], [150, 150, 180, 180]]))),
           # dict(image=Tensor.from_numpy(cv2.imread(image_path3)).transpose(2, 0, 1),
           #      instances=dict(image_size=(1249, 1400), gt_classes=Tensor([3, 7]),
@@ -168,7 +168,7 @@ if __name__ == "__main__":
     train = True
     infer = False
 
-    pth_dir = r"C:\02Data\models" if is_windows else '/data/zhouwuxing/pretrained_model/'
+    pth_dir = r"C:\02Data\models" if is_windows else '/data1/zhouwuxing/pretrained_model/'
     pth_path = os.path.join(pth_dir, "dino_r50_4scale_12ep_49_2AP.pth")
     ms_pth_path = os.path.join(pth_dir, "ms_dino_r50_4scale_12ep_49_2AP.ckpt")
 

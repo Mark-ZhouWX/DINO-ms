@@ -236,7 +236,7 @@ def che_res(in_pth_path, in_ms_pth_path):
 
 if __name__ == "__main__":
 
-    pth_dir = r"C:\02Data\models" if is_windows else '/data/zhouwuxing/pretrained_model/'
+    pth_dir = r"C:\02Data\models" if is_windows else '/data1/zhouwuxing/pretrained_model/'
     pth_path = os.path.join(pth_dir, "dino_r50_4scale_12ep_49_2AP.pth")
     ms_pth_path = os.path.join(pth_dir, "ms_dino_r50_4scale_12ep_49_2AP.ckpt")
 
