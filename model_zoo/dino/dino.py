@@ -179,15 +179,9 @@ class DINO(nn.Cell):
                 res4=ops.ones((2, 1024, 27, 23), ms.float32),
                 res5=ops.ones((2, 2048, 14, 12), ms.float32)
             )
-            img_masks = ops.zeros((2, 423, 359), ms.float32)
+            # img_masks = ops.zeros((2, 423, 359), ms.float32)
             unpad_img_sizes = Tensor([(423, 359), (400, 300)])
-            batched_inputs = [dict(instances=dict(image_size=(423, 359), gt_classes=Tensor([3, 7]),
-                                                  gt_boxes=Tensor([[100, 200, 210, 300], [50, 100, 90, 150]]))),
-                              dict(instances=dict(image_size=(400, 300), gt_classes=Tensor([21, 45, 9]),
-                                                  gt_boxes=Tensor([[80, 220, 150, 320], [180, 100, 300, 200],
-                                                                   [150, 150, 180, 180]]))),
-                              ]
-            targets = None
+            targets = self.prepare_targets(args[0], args[1], args[2])
 
         # model_zoo backbone features to the embed dimension of transformer
         multi_level_feats = self.neck(features)  # list[b, embed_dim, h, w], len=num_level

@@ -8,6 +8,8 @@ from common.detr.backbone.resnet import resnet50
 from common.detr.matcher.matcher import HungarianMatcher
 from common.detr.neck.channel_mapper import ChannelMapper
 from common.layers.position_embedding import PositionEmbeddingSine
+from common.utils.box_ops import box_xyxy_to_cxcywh
+from common.utils.preprocessing import pad_as_batch
 from model_zoo.dino.dino import DINO
 from model_zoo.dino.dino_transformer import DINOTransformer, DINOTransformerEncoder, DINOTransformerDecoder
 from model_zoo.dino.dn_criterion import DINOCriterion
@@ -16,7 +18,7 @@ from test import is_windows
 # set context
 ms.set_context(mode=ms.PYNATIVE_MODE, device_target='GPU')
 
-num_classes = 91
+num_classes = 80
 num_queries = 900
 # build model
 backbone = resnet50(
@@ -124,6 +126,44 @@ inputs = [dict(image=Tensor.from_numpy(cv2.imread(image_path1)).transpose(2, 0, 
           ]
 
 
+def convert_input_format(batched_inputs):
+    batch_size = len(batched_inputs)
+
+    # images
+    pixel_mean = Tensor([123.675, 116.280, 103.530]).view(3, 1, 1)
+    pixel_std = Tensor([58.395, 57.120, 57.375]).view(3, 1, 1)
+    normalizer = lambda x: (x - pixel_mean) / pixel_std
+    images = [normalizer(x["image"]) for x in batched_inputs]
+    images, unpad_img_sizes = pad_as_batch(images)
+
+    _, _, h, w = images.shape
+    img_masks = ops.ones((batch_size, h, w), type=images.dtype)
+    for img_id in range(batch_size):
+        img_h, img_w = batched_inputs[img_id]["instances"]['image_size']
+        img_masks[img_id, :img_h, : img_w] = 0
+
+    # targets
+    gt_instances = [x["instances"] for x in batched_inputs]
+    new_targets = []
+    gt_classes_list = []
+    gt_boxes_list = []
+    gt_valids_list = []
+    for targets_per_image in gt_instances:
+        h, w = targets_per_image['image_size']
+        image_size_xyxy = Tensor([w, h, w, h], dtype=ms.float32)
+        gt_classes = targets_per_image['gt_classes']
+        gt_boxes = targets_per_image['gt_boxes'] / image_size_xyxy  # with reference to valid w,h
+        gt_boxes = box_xyxy_to_cxcywh(gt_boxes)
+        new_targets.append({"labels": gt_classes, "boxes": gt_boxes})
+
+        num_inst = len(gt_boxes)
+        gt_classes_list.append(gt_classes)
+        gt_boxes_list.append(gt_boxes)
+        gt_valids_list.append(ops.ones(num_inst, type=ms.bool_))
+
+    return images, img_masks, gt_classes_list, gt_boxes_list, gt_valids_list
+
+
 if __name__ == "__main__":
     train = True
     infer = False
@@ -134,6 +174,7 @@ if __name__ == "__main__":
 
     ms.load_checkpoint(ms_pth_path, dino)
 
+    images, img_masks, gt_classes_list, gt_boxes_list, gt_valids_list = convert_input_format(inputs)
     if infer:
         dino.set_train(False)
         inf_result = dino(inputs)
@@ -148,9 +189,13 @@ if __name__ == "__main__":
     if train:
         # train
         dino.set_train(True)
-        loss_dict = dino(inputs)
-        for key, value in loss_dict.items():
-            print(key, value)
+        # loss_dict = dino(inputs)
+        loss_dict = dino(images, img_masks, gt_boxes_list, gt_classes_list, gt_valids_list)
+        if isinstance(loss_dict, dict):
+            for key, value in loss_dict.items():
+                print(key, value)
+        else:
+            print('loss', loss_dict)
 
     # train one step
     pass
