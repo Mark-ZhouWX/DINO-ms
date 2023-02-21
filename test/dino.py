@@ -23,7 +23,7 @@ num_queries = 900
 # build model
 backbone = resnet50(
     in_channels=3,
-    norm=nn.BatchNorm2d,
+    norm='FrozenBN',
     out_layers=["res3", "res4", "res5"]
 )
 

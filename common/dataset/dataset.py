@@ -60,6 +60,8 @@ coco_id_dict = {0: 'background', 1: 'person', 2: 'bicycle', 3: 'car', 4: 'motorc
                 87: 'scissors', 88: 'teddy bear', 89: 'hair drier', 90: 'toothbrush'}
 coco_cls_dict = {v: k for k, v in coco_id_dict.items()}
 
+coco_catid_to_clsid = {cat_id: i for i, cat_id in enumerate(coco_id_dict.keys())}
+coco_clsid_to_catid = {i: cat_id for i, cat_id in enumerate(coco_id_dict.keys())}
 
 def create_coco_label(args, is_training):
     """Get image path and annotation from COCO."""
@@ -203,8 +205,10 @@ def preprocess_fn(args, image_id, image, image_anno_dict, is_training):
     image_shape = image.shape[:2]
     ori_shape = image_shape
     gt_box = image_anno_dict[:, :4]
-    gt_label = image_anno_dict[:, 4]
-
+    # gt_label = image_anno_dict[:, 4]
+    gt_label = np.vectorize(coco_catid_to_clsid.get)(image_anno_dict[:, 4])
+    # print(f'cat id {image_anno_dict[:, 4]}')
+    # print(f'cls id {gt_label}')
     target = {
         'image_id': image_id,
         'boxes': gt_box,

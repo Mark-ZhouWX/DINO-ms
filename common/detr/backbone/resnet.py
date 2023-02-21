@@ -4,6 +4,7 @@ Refer to Deep Residual Learning for Image Recognition.
 """
 import logging
 import os
+from functools import partial
 from typing import Optional, Type, List, Union, Dict
 import download
 
@@ -164,6 +165,17 @@ class Bottleneck(nn.Cell):
         return out
 
 
+def get_norm_from_str(norm_str):
+    if norm_str == 'FrozenBN':
+        bn = partial(nn.BatchNorm2d, affine=False, use_batch_statistics=False)
+    elif norm_str == 'BN':
+        bn = nn.BatchNorm2d
+    else:
+        raise NotImplementedError(f'require norm_str [FrozenBN], [BN], got [{norm_str}] instead')
+
+    return bn
+
+
 class ResNet(nn.Cell):
     r"""ResNet model class, based on
     `"Deep Residual Learning for Image Recognition" <https://arxiv.org/abs/1512.03385>`_
@@ -199,6 +211,8 @@ class ResNet(nn.Cell):
 
         if norm is None:
             norm = nn.BatchNorm2d
+        if isinstance(norm, str):
+            norm = get_norm_from_str(norm)
 
         self.norm: nn.Cell = norm  # add type hints to make pylint happy
         self.input_channels = 64
