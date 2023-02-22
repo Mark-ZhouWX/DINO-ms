@@ -4,6 +4,7 @@ from typing import List, Optional
 
 import cv2
 import mindspore as ms
+import numpy as np
 from mindspore import nn, ops, Tensor
 import mindspore.common.initializer as init
 import mindspore.numpy as ms_np
@@ -57,6 +58,7 @@ class DINO(nn.Cell):
                  box_noise_scale: float = 1.0,
                  input_format: Optional[str] = "RGB",
                  vis_period: int = 0,
+                 unit_test=False,
                  ):
         super().__init__()
         # define backbone and position embedding module
@@ -140,6 +142,8 @@ class DINO(nn.Cell):
         self.uniform_real = ops.UniformReal()
         self.uniform_int = ops.UniformInt()
 
+        self.unit_test = unit_test
+
     def construct(self, images, img_masks, *args):
         """Forward function of `DINO` which excepts a list of dict as inputs.
 
@@ -157,7 +161,7 @@ class DINO(nn.Cell):
                 - dict["aux_outputs"]: Optional, only returned when auxilary losses are activated. It is a list of
                             dictionnaries containing the two above keys for each decoder layer.
         """
-        if True:
+        if not self.unit_test:
 
             if self.training:
                 # boxes already normalized to (0,1) in dataset
@@ -174,11 +178,15 @@ class DINO(nn.Cell):
             features = self.backbone(images)
 
         else:  # test inference without backbone
-            features = dict(
-                res3=ops.ones((2, 512, 53, 45), ms.float32),
-                res4=ops.ones((2, 1024, 27, 23), ms.float32),
-                res5=ops.ones((2, 2048, 14, 12), ms.float32)
-            )
+            npz_file = np.load('/data1/zhouwuxing/demo/resnet_fm.npz')
+            features = dict()
+            for k in npz_file.files:
+                features[k] = Tensor(npz_file[k], dtype=images.dtype)
+            # features = dict(
+            #     res3=ops.ones((2, 512, 53, 45), ms.float32),
+            #     res4=ops.ones((2, 1024, 27, 23), ms.float32),
+            #     res5=ops.ones((2, 2048, 14, 12), ms.float32)
+            # )
             # img_masks = ops.zeros((2, 423, 359), ms.float32)
             unpad_img_sizes = Tensor([(423, 359), (400, 300)])
             targets = self.prepare_targets(args[0], args[1], args[2])
@@ -282,6 +290,10 @@ class DINO(nn.Cell):
                 if k in weight_dict:
                     loss_dict[k] *= weight_dict[k]
             loss = sum(loss_dict.values())
+            if self.unit_test:
+                print(f'total loss', loss)
+                for k, v in loss_dict.items():
+                    print(k, v)
             return loss
         else:
             # TODO output score bbox(normalized) and label

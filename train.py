@@ -3,16 +3,12 @@ from datetime import datetime
 from torch.utils.tensorboard import SummaryWriter
 
 import mindspore as ms
-from mindspore import Model, nn, LossMonitor, context, set_seed, ops
-from mindspore import dataset as ds
-from mindspore.nn import WithGradCell
-from mindspore.ops import composite, functional
+from mindspore import nn, context, set_seed
 
 from common.dataset.dataset import create_mindrecord, create_detr_dataset
-from test import is_windows
-from test.dino import dino
+from common.utils.system import is_windows
 from config import config
-
+from model_zoo.dino.build_model import build_dino
 
 if __name__ == '__main__':
     # set context, seed
@@ -32,6 +28,7 @@ if __name__ == '__main__':
     ds_size = dataset.get_dataset_size()
 
     # load pretrained model, only load backbone
+    dino = build_dino()
     pretrain_dir = r"C:\02Data\models" if is_windows else '/data1/zhouwuxing/pretrained_model/'
     pretrain_path = os.path.join(pretrain_dir, "ms_dino_r50_4scale_12ep_49_2AP.ckpt")
     ms.load_checkpoint(pretrain_path, dino, specify_prefix='backbone')
