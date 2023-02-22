@@ -66,8 +66,8 @@ if __name__ == '__main__':
     # training loop
     log_loss_step = 1
     summary_loss_step = 1
-    writer = SummaryWriter('./work_dirs/log')
     start_time = datetime.now()
+    writer = SummaryWriter(f'./work_dirs/tensor_log/{start_time.strftime("%Y_%m_%d_%H_%M_%S")}')
     for e_id in range(epoch_num):
         for s_id, in_data in enumerate(dataset.create_dict_iterator()):
             # image, img_mask(1 for padl), gt_box, gt_label, gt_valid(True for valid)
