@@ -30,7 +30,7 @@ if __name__ == '__main__':
     # load pretrained model, only load backbone
     dino = build_dino()
     pretrain_dir = r"C:\02Data\models" if is_windows else '/data1/zhouwuxing/pretrained_model/'
-    pretrain_path = os.path.join(pretrain_dir, "ms_dino_r50_4scale_12ep_49_2AP.ckpt")
+    pretrain_path = os.path.join(pretrain_dir, "dino_resnet50_backbone.ckpt")
     ms.load_checkpoint(pretrain_path, dino, specify_prefix='backbone')
     print(f'successfully load checkpoint from {pretrain_path}')
 
