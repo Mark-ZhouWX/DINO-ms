@@ -170,8 +170,6 @@ class DINO(nn.Cell):
                 targets = self.prepare_targets(gt_bboxes, gt_labels, gt_valids)
             else:
                 batch_size, _, h, w = images.shape
-                # TODO only training model need mask， 此处不理不解，mask会影响inference吗，看下其他的代码参考下
-                img_masks = ops.zeros((batch_size, h, w), images.dtype)
                 targets = None
 
             # extract features with backbone
@@ -197,7 +195,7 @@ class DINO(nn.Cell):
         multi_level_position_embeddings = []
         for feat in multi_level_feats:
             resize_nearest = ops.ResizeNearestNeighbor(size=feat.shape[-2:])
-            l_mask = ops.squeeze(resize_nearest(ops.expand_dims(img_masks, 0)))
+            l_mask = ops.squeeze(resize_nearest(ops.expand_dims(img_masks, 0)), 0)
             l_mask = ops.cast(l_mask, ms.bool_)
             multi_level_masks.append(l_mask)
             multi_level_position_embeddings.append(self.position_embedding(multi_level_masks[-1]))
@@ -296,6 +294,7 @@ class DINO(nn.Cell):
                     print(k, v)
             return loss
         else:
+            return output
             # TODO output score bbox(normalized) and label
             box_cls = output["pred_logits"]
             box_pred = output["pred_boxes"]

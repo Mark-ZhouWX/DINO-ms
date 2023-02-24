@@ -32,7 +32,7 @@ def box_cxcywh_to_xyxy(bbox) -> Tensor:
     """Convert bbox coordinates from (cx, cy, w, h) to (x1, y1, x2, y2)
 
     Args:
-        bbox (torch.Tensor): Shape (n, 4) for bboxes.
+        bbox (ms.Tensor): Shape (n, 4) for bboxes.
 
     Returns:
         torch.Tensor: Converted bboxes.
@@ -84,12 +84,23 @@ def box_clip(boxes, clip_size: Tuple[int, int]) -> Tensor:
     return boxes
 
 
-def box_scale(boxes, scale_x: float, scale_y: float) -> Tensor:
+def box_scale(boxes, scale) -> Tensor:
     """
     Scale the box with horizontal and vertical scaling factors
+
+    Args:
+        boxes (Tensor[N, 4] or [bs, N, 4]): boxes are specified by their (x1, y1, x2, y2) coordinates
+        scale (Tensor[2] or [bs, 2]): scale factors for x and y coordinates
     """
-    boxes[:, 0::2] *= scale_x
-    boxes[:, 1::2] *= scale_y
+    assert len(boxes.shape) in [2, 3]
+    if len(boxes.shape) == 2:
+        assert len(scale.shape) == 1
+    else:
+        assert len(scale.shape) == 2
+    scale_x, scale_y = scale.unbind(-1)
+    new_scale = ops.stack([scale_x, scale_y, scale_x, scale_y], -1)  # (4,) or (bs, 4)
+    new_scale = new_scale.unsqueeze(-2)
+    boxes *= new_scale
     return boxes
 
 

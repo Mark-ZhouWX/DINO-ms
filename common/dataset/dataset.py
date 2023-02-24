@@ -26,7 +26,7 @@ from mindspore.mindrecord import FileWriter
 
 from common.dataset import transform
 
-coco_classes = ['background', 'person', 'bicycle', 'car', 'motorcycle',
+coco_classes = ['person', 'bicycle', 'car', 'motorcycle',
                 'airplane', 'bus', 'train', 'truck', 'boat',
                 'traffic light', 'fire hydrant', 'stop sign', 'parking meter', 'bench',
                 'bird', 'cat', 'dog', 'horse', 'sheep',
@@ -44,7 +44,7 @@ coco_classes = ['background', 'person', 'bicycle', 'car', 'motorcycle',
                 'clock', 'vase', 'scissors', 'teddy bear', 'hair drier',
                 'toothbrush']
 
-coco_id_dict = {0: 'background', 1: 'person', 2: 'bicycle', 3: 'car', 4: 'motorcycle',
+coco_id_dict = {1: 'person', 2: 'bicycle', 3: 'car', 4: 'motorcycle',
                 5: 'airplane', 6: 'bus', 7: 'train', 8: 'truck',
                 9: 'boat', 10: 'traffic light', 11: 'fire hydrant', 13: 'stop sign', 14: 'parking meter', 15: 'bench',
                 16: 'bird', 17: 'cat', 18: 'dog', 19: 'horse', 20: 'sheep', 21: 'cow', 22: 'elephant', 23: 'bear',
@@ -58,6 +58,10 @@ coco_id_dict = {0: 'background', 1: 'person', 2: 'bicycle', 3: 'car', 4: 'motorc
                 74: 'mouse', 75: 'remote', 76: 'keyboard', 77: 'cell phone', 78: 'microwave', 79: 'oven',
                 80: 'toaster', 81: 'sink', 82: 'refrigerator', 84: 'book', 85: 'clock', 86: 'vase',
                 87: 'scissors', 88: 'teddy bear', 89: 'hair drier', 90: 'toothbrush'}
+
+assert len(coco_classes) == 80
+assert len(coco_id_dict) == 80
+
 coco_cls_dict = {v: k for k, v in coco_id_dict.items()}
 
 coco_catid_to_clsid = {cat_id: i for i, cat_id in enumerate(coco_id_dict.keys())}
