@@ -61,9 +61,9 @@ def visualize(pred_dict: Dict, coco_gt: COCO, save_dir, raw_dir):
         img_file_info = coco_gt.loadImgs(img_id)[0]
         save_path = os.path.join(save_dir, img_file_info['file_name'])
         raw_path = os.path.join(raw_dir, img_file_info['file_name'])
-        choose = res['scores'] > 0.4
+        choose = res['scores'] > 0.3
         labels = ops.masked_select(res['labels'], choose).asnumpy()
-        boxes = ops.masked_select(res['boxes'], choose.unsqueeze(-1)).reshape(-1, 4).asnumpy()
+        boxes = ops.masked_select(res['boxes'], choose.unsqueeze(-1)).asnumpy().reshape(-1, 4)
         scores = ops.masked_select(res['scores'], choose).asnumpy()
         image = cv2.imread(raw_path)
 
@@ -102,10 +102,6 @@ def coco_evaluate(model, eval_dateset, eval_anno_path, save_dir, raw_dir):
         scores, labels, boxes = inference(model, image, mask, size_wh, num_select)
         res = [{'scores': s, 'labels': l, 'boxes': b} for s, l, b in zip(scores, labels, boxes)]
         img_res = {int(idx): output for idx, output in zip(image_id, res)}
-        print('\nimage id', image_id[0])
-        print('score', scores[0, :5])
-        print('label', labels[0, :5])
-        print('box', boxes[0, :5])
         coco_evaluator.update(img_res)
         visualize(img_res, coco_gt, save_dir, raw_dir)
         iii += 1
@@ -179,7 +175,7 @@ if __name__ == '__main__':
     model_path = os.path.join(pth_dir, "ms_dino_r50_4scale_12ep_49_2AP.ckpt")
     ms.load_checkpoint(model_path, eval_model)
 
-    evaluate_coco = False
+    evaluate_coco = True
     if evaluate_coco:
         # evaluate coco
         mindrecord_file = create_mindrecord(config, rank, "DETR.mindrecord.eval", False)
