@@ -4,13 +4,15 @@ from typing import Dict
 
 import cv2
 import mindspore as ms
-from mindspore import ops, Tensor
+import numpy as np
+from mindspore import ops, Tensor, set_seed
 import mindspore.numpy as ms_np
 from pycocotools.coco import COCO
 from tqdm import tqdm
 
 from common.dataset.coco_eval import CocoEvaluator
-from common.dataset.dataset import create_mindrecord, create_detr_dataset, coco_classes
+from common.dataset.dataset import create_mindrecord, create_detr_dataset, coco_classes, coco_clsid_to_catid, \
+    coco_id_dict
 from common.utils.box_ops import box_cxcywh_to_xyxy, box_scale
 from common.utils.system import is_windows
 from config import config
@@ -69,7 +71,7 @@ def visualize(pred_dict: Dict, coco_gt: COCO, save_dir, raw_dir):
 
         for s, l, b in zip(scores, labels, boxes):
             x1, y1, x2, y2 = b
-            class_name = coco_classes[l]
+            class_name = coco_id_dict[l]
             image = cv2.rectangle(image, (int(x1), int(y1)), (int(x2), int(y2)), (0, 255, 255), 2)
             cv2.putText(image, class_name, (int(x1), int(y1)), cv2.FONT_HERSHEY_SIMPLEX, 0.75, (0, 0, 255), 2)
 
@@ -100,7 +102,8 @@ def coco_evaluate(model, eval_dateset, eval_anno_path, save_dir, raw_dir):
         mask = data['mask']  # (bs, h, w)
         size_wh = data['ori_size'][:, ::-1]  # (bs, 2), in wh order
         scores, labels, boxes = inference(model, image, mask, size_wh, num_select)
-        res = [{'scores': s, 'labels': l, 'boxes': b} for s, l, b in zip(scores, labels, boxes)]
+        cat_ids = Tensor(np.vectorize(coco_clsid_to_catid.get)(labels.asnumpy()))
+        res = [{'scores': s, 'labels': l, 'boxes': b} for s, l, b in zip(scores, cat_ids, boxes)]
         img_res = {int(idx): output for idx, output in zip(image_id, res)}
         coco_evaluator.update(img_res)
         visualize(img_res, coco_gt, save_dir, raw_dir)
@@ -164,10 +167,10 @@ def evaluate_single(model):
 if __name__ == '__main__':
     # set context
     ms.set_context(mode=ms.PYNATIVE_MODE, device_target='CPU' if is_windows else 'GPU',
-                   pynative_synchronize=False, device_id=0)
+                   pynative_synchronize=False, device_id=1)
     rank = 0
     device_num = 1
-
+    set_seed(0)
     eval_model = build_dino()
     eval_model.set_train(False)
 
