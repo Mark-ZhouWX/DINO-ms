@@ -124,8 +124,8 @@ class HungarianMatcher(nn.Cell):
         weighted_cost_matrix = ops.stop_gradient(weighted_cost_matrix)
 
         sizes = [len(v["boxes"]) for v in targets]  # [len(inst_0), len(inst_1), ...]
-        split_sections = ops.cumsum(Tensor(sizes, dtype=ms.int32), axis=0)[:-1]
-        split_weights = ms_np.split(weighted_cost_matrix, [int(s) for s in split_sections], axis=-1)
+        # split_sections = ops.cumsum(Tensor(sizes, dtype=ms.int32), axis=0)[:-1]
+        split_weights = ops.split(weighted_cost_matrix, sizes, axis=-1)
 
         # two layer of index, the batch_i+batch_i is kept while batch_i+batch_other discarded
         indices = [linear_sum_assignment(c[i].asnumpy()) for i, c in enumerate(split_weights)]

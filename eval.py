@@ -30,7 +30,7 @@ def select_from_prediction(box_cls, box_pred, num_select=300):
     # TODO 不理解为什么如此选取topk，这样选取的bbox有许多重复的, 用一个query可以预测多个class
     # num_query*num_class must on the last axis
     # (bs, num_query, num_class) -> (bs, num_query*num_class) -> (bs, num_select) + (bs, num_select)
-    topk_values, topk_indexes_full = ops.top_k(prob.view(bs, -1), num_select)
+    topk_values, topk_indexes_full = ops.topk(prob.view(bs, -1), num_select)
     scores = topk_values
     # (bs, num_select)
     topk_boxes_ind = ops.div(topk_indexes_full.astype(ms.float32),

@@ -119,7 +119,7 @@ def convert_input_format_with_resizepad(batched_inputs):
         num_inst = len(gt_boxes)
         gt_classes_list.append(gt_classes)
         gt_boxes_list.append(gt_boxes)
-        gt_valids_list.append(ops.ones(num_inst, type=ms.bool_))
+        gt_valids_list.append(ops.ones(num_inst, ms.bool_))
         unpad_img_sizes_list.append([h, w])
 
     images = ops.stack(new_image_list, 0)
@@ -139,7 +139,7 @@ def convert_input_format(batched_inputs):
     images, unpad_img_sizes = pad_as_batch(images)
 
     _, _, h, w = images.shape
-    img_masks = ops.ones((batch_size, h, w), type=images.dtype)
+    img_masks = ops.ones((batch_size, h, w), images.dtype)
     for img_id in range(batch_size):
         img_h, img_w = batched_inputs[img_id]["instances"]['image_size']
         img_masks[img_id, :img_h, : img_w] = 0
@@ -161,7 +161,7 @@ def convert_input_format(batched_inputs):
         num_inst = len(gt_boxes)
         gt_classes_list.append(gt_classes)
         gt_boxes_list.append(gt_boxes)
-        gt_valids_list.append(ops.ones(num_inst, type=ms.bool_))
+        gt_valids_list.append(ops.ones(num_inst, ms.bool_))
 
     return images, img_masks, gt_classes_list, gt_boxes_list, gt_valids_list
 

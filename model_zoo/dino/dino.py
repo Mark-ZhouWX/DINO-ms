@@ -332,7 +332,7 @@ class DINO(nn.Cell):
         # TODO 不理解为什么如此选取topk，这样选取的bbox有许多重复的
         # num_query*num_class must on the last axis
         # (bs, num_query, num_class) -> (bs, num_query*num_class) -> (bs, eval_num) + (bs, eval_num)
-        topk_values, topk_indexes_full = ops.top_k(
+        topk_values, topk_indexes_full = ops.topk(
             prob.view(bs, -1), self.select_box_nums_for_evaluation
         )
         scores = topk_values
@@ -510,7 +510,7 @@ class DINO(nn.Cell):
             input_query_bbox[(known_bid.long(), map_known_indice)] = input_bbox_embed
 
         tgt_size = pad_size + num_queries
-        attn_mask = ops.ones((tgt_size, tgt_size), type=ms.float32) < 0  # all false, means no mask
+        attn_mask = ops.ones((tgt_size, tgt_size), ms.float32) < 0  # all false, means no mask
         # match query cannot see gt query
         attn_mask[pad_size:, :pad_size] = True  # left bottom gray part of the figure in the paper
         # gt cannot see each other

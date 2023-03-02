@@ -144,7 +144,7 @@ class DINOTransformer(nn.Cell):
         # torch.max returns a tuple (value, index), mindspore.ops.max return a tensor (value)
 
         # k must be the last axis
-        topk_proposals = ops.top_k(enc_outputs_class.max(-1), topk)[1]  # index (bs, k) , k=num_query
+        topk_proposals = ops.topk(enc_outputs_class.max(-1), topk)[1]  # index (bs, k) , k=num_query
         # extract region proposal boxes
         topk_coords_unact = ops.gather_elements(
             enc_outputs_coord_unact, 1, ms_np.tile(topk_proposals.unsqueeze(-1), (1, 1, 4)),
@@ -228,8 +228,8 @@ class DINOTransformer(nn.Cell):
             valid_w = w_mask_not.sum(1)  # (bs,)
 
             grid_y, grid_x = ops.meshgrid(
-                (linspace(Tensor(0, dtype=ms.float32), Tensor(H - 1, dtype=ms.float32), H),
-                 linspace(Tensor(0, dtype=ms.float32), Tensor(W - 1, dtype=ms.float32), W)), indexing='ij')  # (h, w)
+                linspace(Tensor(0, dtype=ms.float32), Tensor(H - 1, dtype=ms.float32), H),
+                linspace(Tensor(0, dtype=ms.float32), Tensor(W - 1, dtype=ms.float32), W), indexing='ij')  # (h, w)
 
             grid = ops.concat([grid_x.expand_dims(-1), grid_y.expand_dims(-1)], -1)  # (h ,w, 2)
 
@@ -280,10 +280,10 @@ class DINOTransformer(nn.Cell):
         for lvl, (H, W) in enumerate(spatial_shapes):
             #  TODO  check this 0.5
             ref_y, ref_x = ops.meshgrid(
-                (linspace(Tensor(0.5, dtype=ms.float32),
-                          Tensor(H - 0.5, dtype=ms.float32), H),
-                 linspace(Tensor(0.5, dtype=ms.float32),
-                          Tensor(W - 0.5, dtype=ms.float32), W)),
+                linspace(Tensor(0.5, dtype=ms.float32),
+                         Tensor(H - 0.5, dtype=ms.float32), H),
+                linspace(Tensor(0.5, dtype=ms.float32),
+                         Tensor(W - 0.5, dtype=ms.float32), W),
                 indexing='ij'
             )  # (h, w)
             ref_y = ref_y.reshape(-1)[None] / (valid_ratios[:, None, lvl, 1] * H)  # (bs, hw)

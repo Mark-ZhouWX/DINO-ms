@@ -28,8 +28,8 @@ def sigmoid_focal_loss(inputs, targets, num_boxes, alpha: float = 0.25, gamma: f
     """
     prob = inputs.sigmoid()
     _, _, num_class = inputs.shape
-    weight = ops.ones(num_class, type=inputs.dtype)
-    pos_weight = ops.ones(num_class, type=inputs.dtype)
+    weight = ops.ones(num_class, inputs.dtype)
+    pos_weight = ops.ones(num_class, inputs.dtype)
     ce_loss = ops.binary_cross_entropy_with_logits(inputs, targets,
                                                    weight=weight, pos_weight=pos_weight, reduction="none")
     p_t = prob * targets + (1 - prob) * (1 - targets)

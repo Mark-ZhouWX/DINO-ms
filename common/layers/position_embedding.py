@@ -113,7 +113,7 @@ def get_sine_pos_embed(pos_tensor: Tensor, num_pos_feats: int = 128, temperature
         sin_x = sin_x.reshape(sin_x.shape[0], sin_x.shape[1], -1)
         return sin_x
 
-    pos_res = [sine_func(x) for x in pos_tensor.split(axis=-1, output_num=pos_tensor.shape[-1])]
+    pos_res = [sine_func(x) for x in ops.split(pos_tensor, 1, axis=-1)]
     if exchange_xy:
         pos_res[0], pos_res[1] = pos_res[1], pos_res[0]
     pos_res = ops.concat(pos_res, axis=2)
