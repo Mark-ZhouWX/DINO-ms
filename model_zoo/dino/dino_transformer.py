@@ -11,6 +11,15 @@ from common.layers.transformer import TransformerLayerSequence, BaseTransformerL
 from common.utils.misc import inverse_sigmoid
 
 
+def linspace(start: Tensor, end: Tensor, num):
+    num = int(num)
+    res = ops.zeros(num, start.dtype)
+    step = ops.div(end - start, num - 1)
+    for i in range(num):
+        res[i] = start + i * step
+    return res
+
+
 class DINOTransformer(nn.Cell):
     """Transformer module for DINO
 
@@ -219,8 +228,8 @@ class DINOTransformer(nn.Cell):
             valid_w = w_mask_not.sum(1)  # (bs,)
 
             grid_y, grid_x = ops.meshgrid(
-                (ops.linspace(Tensor(0, dtype=ms.float32), Tensor(H - 1, dtype=ms.float32), H),
-                ops.linspace(Tensor(0, dtype=ms.float32), Tensor(W - 1, dtype=ms.float32), W)), indexing='ij')  # (h, w)
+                (linspace(Tensor(0, dtype=ms.float32), Tensor(H - 1, dtype=ms.float32), H),
+                 linspace(Tensor(0, dtype=ms.float32), Tensor(W - 1, dtype=ms.float32), W)), indexing='ij')  # (h, w)
 
             grid = ops.concat([grid_x.expand_dims(-1), grid_y.expand_dims(-1)], -1)  # (h ,w, 2)
 
@@ -271,10 +280,10 @@ class DINOTransformer(nn.Cell):
         for lvl, (H, W) in enumerate(spatial_shapes):
             #  TODO  check this 0.5
             ref_y, ref_x = ops.meshgrid(
-                (ops.linspace(Tensor(0.5, dtype=ms.float32),
-                              Tensor(H - 0.5, dtype=ms.float32), H),
-                 ops.linspace(Tensor(0.5, dtype=ms.float32),
-                              Tensor(W - 0.5, dtype=ms.float32), W)),
+                (linspace(Tensor(0.5, dtype=ms.float32),
+                          Tensor(H - 0.5, dtype=ms.float32), H),
+                 linspace(Tensor(0.5, dtype=ms.float32),
+                          Tensor(W - 0.5, dtype=ms.float32), W)),
                 indexing='ij'
             )  # (h, w)
             ref_y = ref_y.reshape(-1)[None] / (valid_ratios[:, None, lvl, 1] * H)  # (bs, hw)

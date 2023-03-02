@@ -6,6 +6,7 @@ import numpy as np
 from mindspore import nn, ops, Tensor
 
 from common.dataset.transform import get_size_with_aspect_ratio
+from common.detr.matcher.matcher import HungarianMatcher
 from common.utils.box_ops import box_xyxy_to_cxcywh
 from common.utils.preprocessing import pad_as_batch
 from common.utils.system import is_windows
@@ -177,6 +178,13 @@ if __name__ == "__main__":
     ms_pth_path = os.path.join(pth_dir, "ms_dino_r50_4scale_12ep_49_2AP.ckpt")
 
     dino = build_dino(unit_test=True)
+
+    # set mix precision
+    dino.to_float(ms.float16)
+    for _, cell in dino.cells_and_names():
+        if isinstance(cell, (nn.BatchNorm1d, nn.BatchNorm2d, nn.BatchNorm3d, HungarianMatcher)):
+            cell.to_float(ms.float32)
+
     ms.load_checkpoint(ms_pth_path, dino)
 
     inputs, _ = get_input()

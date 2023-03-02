@@ -6,6 +6,7 @@ import mindspore as ms
 from mindspore import nn, context, set_seed
 
 from common.dataset.dataset import create_mindrecord, create_detr_dataset
+from common.detr.matcher.matcher import HungarianMatcher
 from common.utils.system import is_windows
 from config import config
 from model_zoo.dino.build_model import build_dino
@@ -13,7 +14,7 @@ from model_zoo.dino.build_model import build_dino
 if __name__ == '__main__':
     # set context, seed
     context.set_context(mode=context.PYNATIVE_MODE, device_target='CPU' if is_windows else 'GPU',
-                        pynative_synchronize=False)
+                        pynative_synchronize=False, device_id=5)
     set_seed(0)
     rank = 0
     device_num = 1
@@ -53,6 +54,12 @@ if __name__ == '__main__':
         {'params': not_backbone_params, 'lr': lr_not_backbone, 'weight_decay': weight_decay}
     ]
     optimizer = nn.AdamWeightDecay(param_dicts)
+
+    # set mix precision
+    dino.to_float(ms.float16)
+    for _, cell in dino.cells_and_names():
+        if isinstance(cell, (nn.BatchNorm1d, nn.BatchNorm2d, nn.BatchNorm3d, HungarianMatcher)):
+            cell.to_float(ms.float32)
 
     # create model with loss scale
     dino.set_train(True)
