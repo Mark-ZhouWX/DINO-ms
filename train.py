@@ -9,6 +9,7 @@ from mindspore import nn, context, set_seed, ParallelMode
 
 from common.dataset.dataset import create_mindrecord, create_detr_dataset
 from common.detr.matcher.matcher import HungarianMatcher
+from common.engine import TrainOneStepWithGradClipLossScaleCell
 from common.utils.system import is_windows
 from config import config
 from model_zoo.dino.build_model import build_dino
@@ -77,7 +78,8 @@ if __name__ == '__main__':
     # create model with loss scale
     dino.set_train(True)
     scale_sense = nn.DynamicLossScaleUpdateCell(loss_scale_value=2 ** 12, scale_factor=2, scale_window=1000)
-    model = nn.TrainOneStepWithLossScaleCell(dino, optimizer, scale_sense)
+    model = TrainOneStepWithGradClipLossScaleCell(dino, optimizer, scale_sense, grad_clip=True, clip_value=0.1)
+    # model = nn.TrainOneStepWithLossScaleCell(dino, optimizer, scale_sense)
     # model = nn.TrainOneStepCell(dino, optimizer)
 
     # training loop
