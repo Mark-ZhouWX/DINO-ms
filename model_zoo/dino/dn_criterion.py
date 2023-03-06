@@ -44,13 +44,6 @@ class TwoStageCriterion(SetCriterion):
 
         # Compute the average number of target boxes across all nodes, for normalization purposes
         num_boxes = sum(len(t["labels"]) for t in targets)
-        num_boxes = Tensor([num_boxes], dtype=ms.float32,)
-        # TODO multi-node distribution, not fully tested 2
-        if ms.communication.GlobalComm.INITED:
-            ops.AllReduce(num_boxes)
-
-        group_size = ms.communication.get_group_size() if ms.communication.GlobalComm.INITED else 1
-        num_boxes = int(ops.clip_by_value(num_boxes / group_size, clip_value_min=1))
 
         # Compute all the requested losses
         losses = {}
@@ -100,15 +93,6 @@ class DINOCriterion(TwoStageCriterion):
         """
         losses = super(DINOCriterion, self).construct(outputs, targets)
         num_boxes = sum(len(t["labels"]) for t in targets)  # total number of instances of a batch
-        num_boxes = Tensor([num_boxes], dtype=ms.float32)
-        # TODO multi-node distribution, not fully tested
-        # if is_dist_avail_and_initialized():
-        #     torch.distributed.all_reduce(num_boxes)
-        if ms.communication.GlobalComm.INITED:
-            ops.AllReduce(num_boxes)
-
-        group_size = ms.communication.get_group_size() if ms.communication.GlobalComm.INITED else 1
-        num_boxes = int(ops.clip_by_value(num_boxes / group_size, clip_value_min=1))
 
         # Compute all the requested losses
         aux_num = 0

@@ -16,3 +16,5 @@ python_multiprocessing: False
 # Augment
 max_size: 960
 flip_ratio: 0.5
+
+distributed: False

@@ -1,9 +1,11 @@
 import os
 from datetime import datetime
+
+from mindspore.communication import init, get_rank, get_group_size
 from torch.utils.tensorboard import SummaryWriter
 
 import mindspore as ms
-from mindspore import nn, context, set_seed
+from mindspore import nn, context, set_seed, ParallelMode
 
 from common.dataset.dataset import create_mindrecord, create_detr_dataset
 from common.detr.matcher.matcher import HungarianMatcher
@@ -14,10 +16,21 @@ from model_zoo.dino.build_model import build_dino
 if __name__ == '__main__':
     # set context, seed
     context.set_context(mode=context.PYNATIVE_MODE, device_target='CPU' if is_windows else 'GPU',
-                        pynative_synchronize=False, device_id=5)
+                        pynative_synchronize=False)
     set_seed(0)
-    rank = 0
-    device_num = 1
+
+    if config.distributed:
+        print('distributed training start')
+        init(backend_name='nccl')
+        rank = get_rank()
+        device_num = get_group_size()
+        print(f'current rank {rank}/{device_num}')
+        context.reset_auto_parallel_context()
+        context.set_auto_parallel_context(device_num=device_num, gradients_mean=True,
+                                          parallel_mode=ParallelMode.DATA_PARALLEL)
+    else:
+        rank = 0
+        device_num = 1
 
     # create dataset
     mindrecord_file = create_mindrecord(config, rank, "DETR.mindrecord", True)
@@ -35,12 +48,12 @@ if __name__ == '__main__':
     ms.load_checkpoint(pretrain_path, dino, specify_prefix='backbone')
     print(f'successfully load checkpoint from {pretrain_path}')
 
-    epoch_num = 3
+    epoch_num = 12
 
     # create optimizer
     lr = 1e-4  # normal learning rate
     lr_backbone = 1e-5  # slower learning rate for pretrained backbone
-    lr_drop = epoch_num // 2
+    lr_drop = epoch_num - 1
     weight_decay = 1e-4
     lr_not_backbone = nn.piecewise_constant_lr(
         [ds_size * lr_drop, ds_size * epoch_num], [lr, lr * 0.1])
@@ -55,11 +68,11 @@ if __name__ == '__main__':
     ]
     optimizer = nn.AdamWeightDecay(param_dicts)
 
-    # set mix precision
-    dino.to_float(ms.float16)
-    for _, cell in dino.cells_and_names():
-        if isinstance(cell, (nn.BatchNorm1d, nn.BatchNorm2d, nn.BatchNorm3d, HungarianMatcher)):
-            cell.to_float(ms.float32)
+    # # set mix precision
+    # dino.to_float(ms.float16)
+    # for _, cell in dino.cells_and_names():
+    #     if isinstance(cell, (nn.BatchNorm1d, nn.BatchNorm2d, nn.BatchNorm3d, HungarianMatcher)):
+    #         cell.to_float(ms.float32)
 
     # create model with loss scale
     dino.set_train(True)
@@ -91,7 +104,7 @@ if __name__ == '__main__':
 
         # save checkpoint every epoch
         print(f'saving checkpoint for epoch {e_id}')
-        ckpt_path = os.path.join(config.output_dir, f'dino_epoch_{e_id:03d}.ckpt')
+        ckpt_path = os.path.join(config.output_dir, f'dino_epoch{e_id:03d}_rank{rank}.ckpt')
         ms.save_checkpoint(dino, ckpt_path)
 
     writer.close()

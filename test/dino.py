@@ -179,11 +179,11 @@ if __name__ == "__main__":
 
     dino = build_dino(unit_test=True)
 
-    # set mix precision
-    dino.to_float(ms.float16)
-    for _, cell in dino.cells_and_names():
-        if isinstance(cell, (nn.BatchNorm1d, nn.BatchNorm2d, nn.BatchNorm3d, HungarianMatcher)):
-            cell.to_float(ms.float32)
+    # # set mix precision
+    # dino.to_float(ms.float16)
+    # for _, cell in dino.cells_and_names():
+    #     if isinstance(cell, (nn.BatchNorm1d, nn.BatchNorm2d, nn.BatchNorm3d, HungarianMatcher)):
+    #         cell.to_float(ms.float32)
 
     ms.load_checkpoint(ms_pth_path, dino)
 
