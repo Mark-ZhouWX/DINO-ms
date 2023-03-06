@@ -14,6 +14,7 @@ from common.utils.misc import inverse_sigmoid
 from common.utils.box_ops import box_cxcywh_to_xyxy, box_xyxy_to_cxcywh
 from common.utils.postprocessing import detector_postprocess
 from common.utils.preprocessing import pad_as_batch
+from common.utils.torch_converter import init_like_torch
 
 
 class DINO(nn.Cell):
@@ -98,10 +99,15 @@ class DINO(nn.Cell):
         # initialize weights
         prior_prob = 0.01
         bias_value = -math.log((1 - prior_prob) / prior_prob)
+        init_like_torch(self.class_embed)
         self.class_embed.bias.set_data(ops.ones(num_classes, self.class_embed.bias.dtype) * bias_value)
-        bbox_last_layer_weight = self.bbox_embed.layers[-1].weight
-        bbox_last_layer_weight.set_data(init.initializer(init.Constant(0),
-                                                         bbox_last_layer_weight.shape, bbox_last_layer_weight.dtype))
+        self.bbox_embed.layers[-1].weight.set_data(init.initializer(init.Constant(0),
+                                                                    self.bbox_embed.layers[-1].weight.shape,
+                                                                    self.bbox_embed.layers[-1].weight.dtype))
+        self.bbox_embed.layers[-1].bias.set_data(init.initializer(init.Constant(0),
+                                                                  self.bbox_embed.layers[-1].bias.shape,
+                                                                  self.bbox_embed.layers[-1].bias.dtype))
+        # class weight/ bbox the first n-1 layer
         for neck_layer in self.neck.name_cells():
             if isinstance(neck_layer, nn.Conv2d):
                 neck_layer.weight.set_data(init.initializer(init.XavierUniform(gain=1)),

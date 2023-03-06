@@ -1,5 +1,7 @@
 from mindspore import nn, Tensor, ops
 
+from common.utils.torch_converter import init_like_torch
+
 
 class MLP(nn.Cell):
     """
@@ -20,6 +22,11 @@ class MLP(nn.Cell):
         self.num_layers = num_layers
         h = [hidden_dim] * (num_layers - 1)
         self.layers = nn.CellList(list(nn.Dense(n, k) for n, k in zip([input_dim] + h, h + [output_dim])))
+        self.init_weights()
+
+    def init_weights(self):
+        for cell in self.cells():
+            init_like_torch(cell)
 
     def construct(self, x):
         """Forward function of `MLP`.
