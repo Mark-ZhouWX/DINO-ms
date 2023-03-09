@@ -3,7 +3,8 @@ import os
 import cv2
 import mindspore as ms
 import numpy as np
-from mindspore import nn, ops, Tensor
+from mindspore import nn, ops, Tensor, value_and_grad
+from mindspore.amp import init_status, all_finite
 
 from common.dataset.transform import get_size_with_aspect_ratio
 from common.detr.matcher.matcher import HungarianMatcher
@@ -168,7 +169,8 @@ def convert_input_format(batched_inputs):
 
 if __name__ == "__main__":
     # set context
-    ms.set_context(mode=ms.PYNATIVE_MODE, device_target='CPU' if is_windows else 'GPU')
+    ms.set_context(mode=ms.PYNATIVE_MODE, device_target='CPU' if is_windows else 'GPU',
+                   pynative_synchronize=True, device_id=2)
 
     train = True
     infer = False
@@ -189,6 +191,7 @@ if __name__ == "__main__":
 
     inputs, _ = get_input()
     images, img_masks, gt_classes_list, gt_boxes_list, gt_valids_list = convert_input_format(inputs)
+    inputs = images, img_masks, gt_boxes_list, gt_classes_list, gt_valids_list
     if infer:
         dino.set_train(False)
         inf_result = dino(inputs)
@@ -203,13 +206,32 @@ if __name__ == "__main__":
     if train:
         # train
         dino.set_train(True)
-        # loss_dict = dino(inputs)
-        loss_dict = dino(images, img_masks, gt_boxes_list, gt_classes_list, gt_valids_list)
-        if isinstance(loss_dict, dict):
-            for key, value in loss_dict.items():
-                print(key, value)
-        else:
-            print('loss', loss_dict)
+
+        def forward(*_inputs):
+            loss_value = dino(*_inputs)
+            return loss_value
+
+        weight = dino.trainable_params()
+        optimizer = nn.SGD(weight, learning_rate=1e-3)
+        # optimizer = nn.AdamWeightDecay(weight, learning_rate=1e-3, beta1=0.9, beta2=0.999, eps=1e-6, weight_decay=1e-4)
+
+        grad_fn = value_and_grad(forward, grad_position=None, weights=weight)
+
+        show_grad_weight = False
+        for k in range(1):
+            status = init_status()
+            loss, gradients = grad_fn(*inputs)
+            is_finite = all_finite(gradients, status)
+            print(f'loss of the {k} step', loss, f'is_finite: {is_finite}')
+
+            if show_grad_weight:
+                for i, grad in enumerate(gradients):
+                    name = weight[i].name
+                    if not name.startswith('neck.convs.2.norm.gamma'):
+                        continue
+                    print(name, grad.shape, grad.mean(), grad.reshape(-1)[:3],
+                          weight[i].data.mean(), weight[i].data.reshape(-1)[:3])
+            optimizer(gradients)
 
     # train one step
     pass
