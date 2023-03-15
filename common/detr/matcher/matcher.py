@@ -5,6 +5,7 @@ from mindspore import nn, ops, Tensor
 from scipy.optimize import linear_sum_assignment
 
 from common.utils.box_ops import generalized_box_iou, box_cxcywh_to_xyxy
+from common.utils.walk_around import cdist, split
 
 
 class HungarianMatcher(nn.Cell):
@@ -104,13 +105,14 @@ class HungarianMatcher(nn.Cell):
             gamma = self.gamma
             neg_cost_class = (1 - alpha) * (out_prob**gamma) * (-(1 - out_prob + 1e-8).log())
             pos_cost_class = alpha * ((1 - out_prob) ** gamma) * (-(out_prob + 1e-8).log())
-            cost_class = pos_cost_class[:, tgt_ids] - neg_cost_class[:, tgt_ids]
+            cost_class = ops.gather(pos_cost_class - neg_cost_class, tgt_ids, axis=1)
+            # cost_class = pos_cost_class[:, tgt_ids] - neg_cost_class[:, tgt_ids]
         else:
             raise NotImplementedError(f'support only ce_cost and focal_loss_cost, '
                                       f'but got class_type {self.cost_class_type}')
 
         # Compute the L1 cost between boxes
-        cost_bbox = ops.cdist(out_bbox, tgt_bbox, p=1.0)
+        cost_bbox = cdist(out_bbox, tgt_bbox, p=1.0)
 
         # Compute the giou cost betwen boxes
         cost_giou = -generalized_box_iou(box_cxcywh_to_xyxy(out_bbox), box_cxcywh_to_xyxy(tgt_bbox))
@@ -123,9 +125,9 @@ class HungarianMatcher(nn.Cell):
         # TODO to test, hungarian matcher does not need gradient
         weighted_cost_matrix = ops.stop_gradient(weighted_cost_matrix)
 
-        sizes = [len(v["boxes"]) for v in targets]  # [len(inst_0), len(inst_1), ...]
+        sizes = [v["boxes"].shape[0] for v in targets]  # [len(inst_0), len(inst_1), ...]
         # split_sections = ops.cumsum(Tensor(sizes, dtype=ms.int32), axis=0)[:-1]
-        split_weights = ops.split(weighted_cost_matrix, sizes, axis=-1)
+        split_weights = split(weighted_cost_matrix, sizes, axis=-1)
 
         # two layer of index, the batch_i+batch_i is kept while batch_i+batch_other discarded
         indices = [linear_sum_assignment(c[i].asnumpy()) for i, c in enumerate(split_weights)]

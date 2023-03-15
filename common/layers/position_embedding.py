@@ -3,6 +3,8 @@ import math
 import mindspore as ms
 from mindspore import nn, Tensor, ops
 
+from common.utils.walk_around import split
+
 
 class PositionEmbeddingSine(nn.Cell):
     """Sinusoidal position embedding used in DETR model.
@@ -67,9 +69,9 @@ class PositionEmbeddingSine(nn.Cell):
         if self.normalize:
             y_embed = (y_embed + self.offset) / (y_embed[:, -1:, :] + self.eps) * self.scale
             x_embed = (x_embed + self.offset) / (x_embed[:, :, -1:] + self.eps) * self.scale
-        dim_t = ops.arange(self.num_pos_feats, dtype=ms.float32)
+        dim_t = ops.arange(self.num_pos_feats).astype(ms.float32)
         dim_t = self.temperature ** (
-                2 * ops.div(dim_t, 2, rounding_mode="floor") / self.num_pos_feats
+                2 * ops.floor_div(dim_t, 2) / self.num_pos_feats
         )
         pos_x = x_embed[:, :, :, None] / dim_t
         pos_y = y_embed[:, :, :, None] / dim_t
@@ -82,7 +84,7 @@ class PositionEmbeddingSine(nn.Cell):
         pos_y = ops.stack((ops.sin(pos_y[:, :, :, 0::2]), ops.cos(pos_y[:, :, :, 1::2])), axis=4).view(
             B, H, W, -1
         )
-        pos = ops.concat((pos_y, pos_x), axis=3).permute(0, 3, 1, 2)
+        pos = ops.concat((pos_y, pos_x), axis=3).transpose(0, 3, 1, 2)
         return pos
 
 
@@ -104,8 +106,8 @@ def get_sine_pos_embed(pos_tensor: Tensor, num_pos_feats: int = 128, temperature
         with shape `(None, n * num_pos_feats)`.
     """
     scale = 2 * math.pi
-    dim_t = ops.arange(num_pos_feats, dtype=ms.float32)
-    dim_t = temperature ** (2 * ops.div(dim_t, 2, rounding_mode="floor") / num_pos_feats)
+    dim_t = ops.arange(num_pos_feats).astype(ms.float32)
+    dim_t = temperature ** (2 * ops.floor_div(dim_t, 2) / num_pos_feats)
 
     def sine_func(x: Tensor):
         sin_x = x * scale / dim_t
@@ -113,7 +115,7 @@ def get_sine_pos_embed(pos_tensor: Tensor, num_pos_feats: int = 128, temperature
         sin_x = sin_x.reshape(sin_x.shape[0], sin_x.shape[1], -1)
         return sin_x
 
-    pos_res = [sine_func(x) for x in ops.split(pos_tensor, 1, axis=-1)]
+    pos_res = [sine_func(x) for x in split(pos_tensor, 1, axis=-1)]
     if exchange_xy:
         pos_res[0], pos_res[1] = pos_res[1], pos_res[0]
     pos_res = ops.concat(pos_res, axis=2)

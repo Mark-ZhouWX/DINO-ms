@@ -118,9 +118,9 @@ class SetCriterion(nn.Cell):
             # src_logits: (b, num_queries, num_classes) = (2, 300, 80)
             # target_classes_one_hot = (2, 300, 80)
             target_classes_onehot = ops.zeros((bs, num_query, num_class + 1), ms.float32)
-            ones = ops.ones_like(target_classes.unsqueeze(-1)).astype(ms.float32)
+            ones = ops.ones_like(ops.expand_dims(target_classes, -1)).astype(ms.float32)
             target_classes_onehot = ops.tensor_scatter_elements(target_classes_onehot,
-                                                                target_classes.unsqueeze(-1), ones, axis=2)
+                                                                ops.expand_dims(target_classes, -1), ones, axis=2)
             target_classes_onehot = target_classes_onehot[:, :, :-1]
 
             # TODO better use this
@@ -203,7 +203,7 @@ class SetCriterion(nn.Cell):
             indices_list = []
 
         # Compute the average number of target boxes accross all nodes, for normalization purposes
-        num_boxes = sum(len(t["labels"]) for t in targets)
+        num_boxes = sum(t["labels"].shape[0] for t in targets)
 
         # Compute all the requested losses
         losses = {}

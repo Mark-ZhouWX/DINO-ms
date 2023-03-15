@@ -43,7 +43,7 @@ class TwoStageCriterion(SetCriterion):
         indices = self.matcher(outputs_without_aux, targets)  # [(ind_src, ind_tgt)], len(indices)=bs
 
         # Compute the average number of target boxes across all nodes, for normalization purposes
-        num_boxes = sum(len(t["labels"]) for t in targets)
+        num_boxes = sum(t["labels"].shape[0] for t in targets)
 
         # Compute all the requested losses
         losses = {}
@@ -92,7 +92,7 @@ class DINOCriterion(TwoStageCriterion):
              dn_metas: de-noising information, including dn predicts and dn_number, etc.
         """
         losses = super(DINOCriterion, self).construct(outputs, targets)
-        num_boxes = sum(len(t["labels"]) for t in targets)  # total number of instances of a batch
+        num_boxes = sum(t["labels"].shape[0] for t in targets)  # total number of instances of a batch
 
         # Compute all the requested losses
         aux_num = 0

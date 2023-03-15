@@ -144,10 +144,10 @@ class DINOTransformer(nn.Cell):
         # torch.max returns a tuple (value, index), mindspore.ops.max return a tensor (value)
 
         # k must be the last axis
-        topk_proposals = ops.topk(enc_outputs_class.max(-1), topk)[1]  # index (bs, k) , k=num_query
+        topk_proposals = ops.top_k(enc_outputs_class.max(-1), topk)[1]  # index (bs, k) , k=num_query
         # extract region proposal boxes
         topk_coords_unact = ops.gather_elements(
-            enc_outputs_coord_unact, 1, ms_np.tile(topk_proposals.unsqueeze(-1), (1, 1, 4)),
+            enc_outputs_coord_unact, 1, ms_np.tile(ops.expand_dims(topk_proposals, -1), (1, 1, 4)),
         )  # unsigmoided. (bs, k, 4)
         reference_points = ops.stop_gradient(topk_coords_unact).sigmoid()
         if query_embed[1] is not None:
@@ -157,7 +157,7 @@ class DINOTransformer(nn.Cell):
         # extract region features
 
         target_unact = ops.gather_elements(
-            output_memory, 1, ms_np.tile(topk_proposals.unsqueeze(-1), (1, 1, output_memory.shape[-1]))
+            output_memory, 1, ms_np.tile(ops.expand_dims(topk_proposals, -1), (1, 1, output_memory.shape[-1]))
         )
         if self.learnt_init_query:
             bs = multi_level_feats[0].shape[0]
@@ -228,8 +228,8 @@ class DINOTransformer(nn.Cell):
             valid_w = w_mask_not.sum(1)  # (bs,)
 
             grid_y, grid_x = ops.meshgrid(
-                linspace(Tensor(0, dtype=ms.float32), Tensor(H - 1, dtype=ms.float32), H),
-                linspace(Tensor(0, dtype=ms.float32), Tensor(W - 1, dtype=ms.float32), W), indexing='ij')  # (h, w)
+                (linspace(Tensor(0, dtype=ms.float32), Tensor(H - 1, dtype=ms.float32), H),
+                linspace(Tensor(0, dtype=ms.float32), Tensor(W - 1, dtype=ms.float32), W)), indexing='ij')  # (h, w)
 
             grid = ops.concat([grid_x.expand_dims(-1), grid_y.expand_dims(-1)], -1)  # (h ,w, 2)
 
@@ -244,7 +244,8 @@ class DINOTransformer(nn.Cell):
         # filter proposal
         output_proposals = ops.concat(proposals, 1)  # (bs, sum(hw), 4)
         # filter those whose centers are too close to the margin or wh too small or too large
-        output_proposals_valid = ((output_proposals > 0.01) & (output_proposals < 0.99)).all(
+        
+        output_proposals_valid = ops.logical_and(output_proposals > 0.01, output_proposals < 0.99).all(
             -1, keep_dims=True
         )  # (bs, sum(hw), 1)
         output_proposals = ops.log(output_proposals / (1 - output_proposals))  # unsigmoid
@@ -280,10 +281,10 @@ class DINOTransformer(nn.Cell):
         for lvl, (H, W) in enumerate(spatial_shapes):
             #  TODO  check this 0.5
             ref_y, ref_x = ops.meshgrid(
-                linspace(Tensor(0.5, dtype=ms.float32),
+                (linspace(Tensor(0.5, dtype=ms.float32),
                          Tensor(H - 0.5, dtype=ms.float32), H),
                 linspace(Tensor(0.5, dtype=ms.float32),
-                         Tensor(W - 0.5, dtype=ms.float32), W),
+                         Tensor(W - 0.5, dtype=ms.float32), W)),
                 indexing='ij'
             )  # (h, w)
             ref_y = ref_y.reshape(-1)[None] / (valid_ratios[:, None, lvl, 1] * H)  # (bs, hw)
@@ -303,8 +304,8 @@ class DINOTransformer(nn.Cell):
             w_mask_not = ops.cast(w_mask_not, ms.float32)
         valid_H = h_mask_not.sum(1)
         valid_W = w_mask_not.sum(1)
-        valid_ratio_h = valid_H.float() / H
-        valid_ratio_w = valid_W.float() / W
+        valid_ratio_h = valid_H.astype(ms.float32) / H
+        valid_ratio_w = valid_W.astype(ms.float32) / W
         valid_ratio = ops.stack([valid_ratio_w, valid_ratio_h], -1)
         return valid_ratio
 

@@ -3,8 +3,7 @@ import os
 import cv2
 import mindspore as ms
 import numpy as np
-from mindspore import nn, ops, Tensor, value_and_grad
-from mindspore.amp import init_status, all_finite
+from mindspore import ParameterTuple, nn, ops, Tensor
 
 from common.dataset.transform import get_size_with_aspect_ratio
 from common.detr.matcher.matcher import HungarianMatcher
@@ -16,7 +15,7 @@ from model_zoo.dino.build_model import build_dino
 
 def get_input():
     # test inference runtime
-    image_root = r"C:\02Data\demo\image" if is_windows else '/data1/zhouwuxing/demo/'
+    image_root = r"C:\02Data\demo\image" if is_windows else '/data1/zhouwuxing/projects/demo/'
     image_path1 = os.path.join(image_root, 'hrnet_demo.jpg')
     image_path2 = os.path.join(image_root, 'road554.png')
     image_path3 = os.path.join(image_root, 'orange_71.jpg')
@@ -175,7 +174,7 @@ if __name__ == "__main__":
     train = True
     infer = False
 
-    pth_dir = r"C:\02Data\models" if is_windows else '/data1/zhouwuxing/pretrained_model/'
+    pth_dir = r"C:\02Data\models" if is_windows else '/data1/zhouwuxing/projects/pretrained_model/'
     pth_path = os.path.join(pth_dir, "dino_r50_4scale_12ep_49_2AP.pth")
     ms_pth_path = os.path.join(pth_dir, "ms_dino_r50_4scale_12ep_49_2AP.ckpt")
 
@@ -207,22 +206,18 @@ if __name__ == "__main__":
         # train
         dino.set_train(True)
 
-        def forward(*_inputs):
-            loss_value = dino(*_inputs)
-            return loss_value
-
         weight = dino.trainable_params()
         optimizer = nn.SGD(weight, learning_rate=1e-3)
         # optimizer = nn.AdamWeightDecay(weight, learning_rate=1e-3, beta1=0.9, beta2=0.999, eps=1e-6, weight_decay=1e-4)
 
-        grad_fn = value_and_grad(forward, grad_position=None, weights=weight)
+        # grad_fn = value_and_grad(forward, grad_position=None, weights=weight)
+        grad_fn = ops.GradOperation(get_by_list=True)(dino, ParameterTuple(weight))
 
         show_grad_weight = False
-        for k in range(1):
-            status = init_status()
-            loss, gradients = grad_fn(*inputs)
-            is_finite = all_finite(gradients, status)
-            print(f'loss of the {k} step', loss, f'is_finite: {is_finite}')
+        for k in range(10):
+            loss = dino(*inputs)
+            gradients = grad_fn(*inputs)
+            print(f'loss of the {k} step', loss)
 
             if show_grad_weight:
                 for i, grad in enumerate(gradients):

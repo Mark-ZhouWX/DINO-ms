@@ -182,15 +182,15 @@ class DINO(nn.Cell):
             features = self.backbone(images)
 
         else:  # test inference without backbone
-            npz_file = np.load('/data1/zhouwuxing/demo/resnet_fm.npz')
-            features = dict()
-            for k in npz_file.files:
-                features[k] = Tensor(npz_file[k], dtype=images.dtype)
-            # features = dict(
-            #     res3=ops.ones((2, 512, 53, 45), ms.float32),
-            #     res4=ops.ones((2, 1024, 27, 23), ms.float32),
-            #     res5=ops.ones((2, 2048, 14, 12), ms.float32)
-            # )
+            # npz_file = np.load('/data1/zhouwuxing/demo/resnet_fm.npz')
+            # features = dict()
+            # for k in npz_file.files:
+            #     features[k] = Tensor(npz_file[k], dtype=images.dtype)
+            features = dict(
+                res3=ops.ones((2, 512, 53, 45), ms.float32),
+                res4=ops.ones((2, 1024, 27, 23), ms.float32),
+                res5=ops.ones((2, 2048, 14, 12), ms.float32)
+            )
             # img_masks = ops.zeros((2, 423, 359), ms.float32)
             unpad_img_sizes = Tensor([(423, 359), (400, 300)])
             targets = self.prepare_targets(args[0], args[1], args[2])

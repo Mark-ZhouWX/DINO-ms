@@ -37,7 +37,7 @@ def box_cxcywh_to_xyxy(bbox) -> Tensor:
     Returns:
         torch.Tensor: Converted bboxes.
     """
-    cx, cy, w, h = bbox.unbind(-1)
+    cx, cy, w, h = ops.unstack(bbox, axis=-1)
     new_bbox = [(cx - 0.5 * w), (cy - 0.5 * h), (cx + 0.5 * w), (cy + 0.5 * h)]
     return ops.stack(new_bbox, axis=-1)
 
@@ -51,7 +51,7 @@ def box_xyxy_to_cxcywh(bbox) -> Tensor:
     Returns:
         torch.Tensor: Converted bboxes.
     """
-    x0, y0, x1, y1 = bbox.unbind(-1)
+    x0, y0, x1, y1 = ops.unstack(bbox, axis=-1)
     new_bbox = [(x0 + x1) / 2, (y0 + y1) / 2, (x1 - x0), (y1 - y0)]
     return ops.stack(new_bbox, axis=-1)
 
@@ -124,7 +124,7 @@ def box_intersection(boxes1, boxes2) -> Tensor:
     lb = ops.maximum(boxes1[:, None, :2], boxes2[:, :2])  # left bottom [N,M,2]
     rt = ops.minimum(boxes1[:, None, 2:], boxes2[:, 2:])  # right top [N,M,2]
 
-    wh = ops.clip_by_value((rt - lb), clip_value_min=0)  # [N,M,2]
+    wh = ops.clip_by_value((rt - lb), clip_value_min=Tensor(0.0))  # [N,M,2]
     inter = wh[:, :, 0] * wh[:, :, 1]  # [N,M]
 
     return inter
@@ -180,7 +180,7 @@ def generalized_box_iou(boxes1, boxes2) -> Tensor:
     # area of box minimum exterior rectangle (MER)
     lt = ops.minimum(boxes1[:, None, :2], boxes2[:, :2])
     rb = ops.maximum(boxes1[:, None, 2:], boxes2[:, 2:])
-    wh = ops.clip_by_value((rb - lt), clip_value_min=0)  # [N,M,2]
+    wh = ops.clip_by_value((rb - lt), clip_value_min=Tensor(0.0))  # [N,M,2]
     area = wh[:, :, 0] * wh[:, :, 1]
 
     return iou - (area - union) / (area + 1e-6)

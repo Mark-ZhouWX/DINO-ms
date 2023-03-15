@@ -7,6 +7,8 @@ from mindspore import nn, ops, Tensor
 import mindspore.common.initializer as init
 import mindspore.numpy as ms_np
 
+from common.utils.walk_around import split
+
 def _is_power_of_2(n):
     if (not isinstance(n, int)) or (n < 0):
         raise ValueError("invalid input for _is_power_of_2: {} (type: {})".format(n, type(n)))
@@ -76,7 +78,7 @@ class MultiScaleDeformableAttention(nn.Cell):
         """
         pshape, dtype = self.sampling_offsets.weight.shape, self.sampling_offsets.weight.dtype
         self.sampling_offsets.weight.set_data(init.initializer('zeros', pshape, dtype))
-        thetas = ops.arange(self.num_heads, dtype=ms.float32) * (2.0 * math.pi / self.num_heads)  # (num_head,)
+        thetas = ops.arange(self.num_heads).astype(ms.float32) * (2.0 * math.pi / self.num_heads)  # (num_head,)
         grid_init = ops.stack([ops.cos(thetas), ops.sin(thetas)], -1)  # (num_head, 2)
         grid_init = ms_np.tile(
             # (num_head, 1) -> (8, 1) -> (num_head, 2)
@@ -230,7 +232,8 @@ def multi_scale_deformable_attn_pytorch(
     _, num_queries, num_heads, num_levels, num_points, _ = sampling_locations.shape
     # indices_or_sections = ops.cumsum(value_spatial_shapes[:, 0] * value_spatial_shapes[:, 1], axis=0)[:-1]
     split_sections = (value_spatial_shapes[:, 0] * value_spatial_shapes[:, 1]).astype(ms.int32).asnumpy().tolist()
-    value_list = ops.split(value, split_sections, axis=1)
+    # value_list = ops.split(value, split_sections, axis=1)
+    value_list = split(value, split_sections, axis=1)
     sampling_grids = 2 * sampling_locations - 1
     sampling_value_list = []
     value_spatial_shapes_list = value_spatial_shapes.asnumpy().tolist()
