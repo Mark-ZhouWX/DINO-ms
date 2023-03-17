@@ -15,7 +15,7 @@ from model_zoo.dino.build_model import build_dino
 
 def get_input():
     # test inference runtime
-    image_root = r"C:\02Data\demo\image" if is_windows else '/data1/zhouwuxing/projects/demo/'
+    image_root = r"C:\02Data\demo\image" if is_windows else './data/demo/'
     image_path1 = os.path.join(image_root, 'hrnet_demo.jpg')
     image_path2 = os.path.join(image_root, 'road554.png')
     image_path3 = os.path.join(image_root, 'orange_71.jpg')
@@ -168,14 +168,13 @@ def convert_input_format(batched_inputs):
 
 if __name__ == "__main__":
     # set context
-    ms.set_context(mode=ms.PYNATIVE_MODE, device_target='CPU' if is_windows else 'GPU',
+    ms.set_context(mode=ms.PYNATIVE_MODE, device_target='CPU' if is_windows else 'Ascend',
                    pynative_synchronize=True, device_id=2)
 
     train = True
     infer = False
 
-    pth_dir = r"C:\02Data\models" if is_windows else '/data1/zhouwuxing/projects/pretrained_model/'
-    pth_path = os.path.join(pth_dir, "dino_r50_4scale_12ep_49_2AP.pth")
+    pth_dir = r"C:\02Data\models" if is_windows else './pretrained_model/'
     ms_pth_path = os.path.join(pth_dir, "ms_dino_r50_4scale_12ep_49_2AP.ckpt")
 
     dino = build_dino(unit_test=True)

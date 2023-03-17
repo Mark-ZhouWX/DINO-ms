@@ -227,6 +227,13 @@ class OutData(object):
             gt_valid = np.zeros((self.pad_max_number,))
             gt_valid[:box_num] = 1
             gt_valid = gt_valid.astype(np.bool_)  # (pad_max_number) False keep, True drop
+
+            # # fix boxes num = 3
+            # gt_box = np.array([0.4, 0.5, 0.1, 0.2], [0.7, 0.6, 0.3, 0.2], [0.3, 0.6, 0.1, 0.2], dtype=np.float32)
+            # gt_label = np.array([4, 8, 10], dtype=np.int32)
+            # gt_valid = np.ones(3, dtype=np.bool_)
+            # print('gt_label', gt_label)
+
             return img_data, mask, gt_box, gt_label, gt_valid
         else:
             image_id = target['image_id'].astype(np.int32)

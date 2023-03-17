@@ -96,7 +96,7 @@ class DINOTransformer(nn.Cell):
         feat_flatten = ops.concat(feat_flatten, 1)
         mask_flatten = ops.concat(mask_flatten, 1)
         lvl_pos_embed_flatten = ops.concat(lvl_pos_embed_flatten, 1)
-        spatial_shapes = Tensor(spatial_shapes, dtype=ms.int64)
+        spatial_shapes = Tensor(spatial_shapes, dtype=ms.int32)
         level_start_index = ops.concat((ops.zeros((1,), spatial_shapes.dtype),
                                         (spatial_shapes[:, 0] * spatial_shapes[:, 1]).cumsum(0)[:-1]))
         # there may be slight difference of ratio values between different level due to of mask quantization
