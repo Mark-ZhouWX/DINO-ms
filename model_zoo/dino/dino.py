@@ -294,10 +294,10 @@ class DINO(nn.Cell):
                 if k in weight_dict:
                     loss_dict[k] *= weight_dict[k]
             loss = sum(loss_dict.values())
-            if self.unit_test:
-                print(f'total loss', loss)
-                for k, v in loss_dict.items():
-                    print(k, v)
+            # if self.unit_test:
+            #     print(f'total loss', loss)
+            #     for k, v in loss_dict.items():
+            #         print(k, v)
             return loss
         else:
             return output

@@ -108,7 +108,11 @@ class SetCriterion(nn.Cell):
         target_classes_o = ops.concat([t["labels"][J] for t, (_, J) in zip(targets, indices)])
         # (bs, num_query)  value=80
         target_classes = ms_np.full((bs, num_query), self.num_classes, dtype=ms.int64)
-        target_classes[idx] = target_classes_o
+        # for i in range(num_boxes):
+        #     target_classes[idx[0][i], idx[1][i]] = target_classes_o[i]
+        target_classes = target_classes.astype(ms.float32)
+        target_classes[idx] = target_classes_o.astype(ms.float32)
+        target_classes = target_classes.astype(ms.int64)
 
         # Computation classification loss
         if self.loss_class_type == "ce_loss":

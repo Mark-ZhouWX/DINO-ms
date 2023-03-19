@@ -22,7 +22,6 @@ def split(value, indices, axis):
 
 
 def cdist(x, y, p=1.0):
-    print(x.shape, y.shape)
     assert p == 1.0
     assert len(x.shape) == 2
 
