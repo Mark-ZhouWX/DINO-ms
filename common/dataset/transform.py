@@ -205,9 +205,10 @@ class OutData(object):
     Returns:
         padded image, padded gt and their masks
     """
-    def __init__(self, is_training=True, max_size=1333):
+    def __init__(self, is_training=True, max_size=1333, pad_label=-1):
         self.is_training = is_training
         self.pad_max_number = 100
+        self.pad_label = pad_label
         self.pad_func = Pad(max_size, max_size)
 
     def __call__(self, img, target):
@@ -223,7 +224,8 @@ class OutData(object):
 
             box_num = len(labels)
             gt_box = np.pad(boxes, ((0, self.pad_max_number - box_num), (0, 0)), mode="constant", constant_values=0)
-            gt_label = np.pad(labels, (0, self.pad_max_number - box_num), mode="constant", constant_values=-1)
+            gt_label = np.pad(labels, (0, self.pad_max_number - box_num),
+                              mode="constant", constant_values=self.pad_label)
             gt_valid = np.zeros((self.pad_max_number,))
             gt_valid[:box_num] = 1
             gt_valid = gt_valid.astype(np.bool_)  # (pad_max_number) False keep, True drop

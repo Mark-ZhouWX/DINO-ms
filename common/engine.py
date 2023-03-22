@@ -8,6 +8,18 @@ def tensor_grad_scale(scale, grad):
     return grad * ops.cast(ops.Reciprocal()(scale), ops.dtype(grad))
 
 
+class WithLossCell(nn.Cell):
+    def __init__(self, net, criterion):
+        super(WithLossCell, self).__init__(auto_prefix=False)
+        self.net = net
+        self.criterion = criterion
+
+    def construct(self, x, mask, targets):
+        output = self.net(x, mask, targets)
+        losses = self.criterion(output, targets)
+        return losses
+
+
 class TrainOneStepWithGradClipLossScaleCell(nn.TrainOneStepWithLossScaleCell):
     """
     Network training package class with gradient clip.

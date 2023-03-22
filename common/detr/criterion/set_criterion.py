@@ -90,29 +90,36 @@ class SetCriterion(nn.Cell):
             self.empty_weight = empty_weight
         self.l1_loss = nn.L1Loss(reduction="none")
 
-    def loss_labels(self, outputs, targets, indices, num_boxes):
+    def loss_labels(self, outputs, targets, indices):
         """
         Classification loss (Binary focal loss)
-        outputs (dict): predictions, a dict that contains pred_logits pred_bbox, etc.
+        outputs (Tuple[Tensor]): predictions, contains logits and bbox.
         targets (dict): targets, a dict that contains the key "labels" containing a tensor of dim [nb_target_boxes]
         indices (List[Tuple[Tensor, Tensor]]): list with length batch_size, each element
                                                 is the indices of source query and target bbox.
         """
-        assert "pred_logits" in outputs
-        src_logits = outputs["pred_logits"]  # (bs, num_query, num_class)
-        bs, num_query, num_class = src_logits.shape
+
+        src_logits, _ = outputs  # (bs, num_query, num_class),
+        tgt_labels, _, tgt_valids = targets
+        tgt_labels *= tgt_valids.astype(ms.int32)
+        tgt_labels += ops.logical_not(tgt_valids).astype(ms.int32) * self.num_classes  # replace unvalid with num_class
+
+        bs, num_pad_box = tgt_valids.shape
+        num_valid_box = ops.reduce_sum(tgt_valids.astype(ms.float32))
+
+        _, num_query, num_class = src_logits.shape
 
         # Assign gt label to all queries, the label of 'no object' is num_class
-        idx = self._get_src_permutation_idx(indices)  # tuple with batch_idx and query_idx
-        # (sum_instance,) [3,4,   7,2,9]
-        target_classes_o = ops.concat([t["labels"][J] for t, (_, J) in zip(targets, indices)])
+        src_ind, tgt_ind = indices  # (bs, num_pad_box),  (bs, num_pad_box)
+        src_ind = (src_ind + num_query) % num_query  # replace -1 with num_query-1
+        tgt_ind = (tgt_ind + num_pad_box) % num_pad_box  # replace -1 with num_pad_box-1
+
         # (bs, num_query)  value=80
-        target_classes = ms_np.full((bs, num_query), self.num_classes, dtype=ms.int64)
-        # for i in range(num_boxes):
-        #     target_classes[idx[0][i], idx[1][i]] = target_classes_o[i]
-        target_classes = target_classes.astype(ms.float32)
-        target_classes[idx] = target_classes_o.astype(ms.float32)
-        target_classes = target_classes.astype(ms.int64)
+        target_classes = ms_np.full((bs, num_query), self.num_classes, dtype=ms.float32)
+        for i in range(bs):
+            one_tc =ops.gather(tgt_labels[i].astype(ms.float32), tgt_ind[i], 0)  # (bs, num_pad_box)
+            target_classes[i] = ops.scatter_update(target_classes[i], src_ind[i], one_tc)
+        target_classes = target_classes.astype(ms.int32)
 
         # Computation classification loss
         if self.loss_class_type == "ce_loss":
@@ -135,7 +142,7 @@ class SetCriterion(nn.Cell):
                     sigmoid_focal_loss(
                         src_logits,
                         target_classes_onehot,
-                        num_boxes=num_boxes,
+                        num_boxes=num_valid_box,
                         alpha=self.alpha,
                         gamma=self.gamma,
                     )
@@ -148,46 +155,52 @@ class SetCriterion(nn.Cell):
 
         return losses
 
-    def loss_boxes(self, outputs, targets, indices, num_boxes):
+    def loss_boxes(self, outputs, targets, indices):
         """
         Compute the losses related to the bounding boxes, the L1 regression loss and the GIoU loss
         targets dicts must contain the key "boxes" containing a tensor of dim [nb_target_boxes, 4]
         The target boxes are expected in format (center_x, center_y, w, h), normalized by the image size.
         """
-        assert "pred_boxes" in outputs
-        idx = self._get_src_permutation_idx(indices)  # tuple with batch_idx and query_idx of matched prediction
-        # outputs["pred_boxes"] (bs, num_query, 4)
-        src_boxes = outputs["pred_boxes"][idx]
-        # pick out target boxes
-        target_boxes = ops.concat([t["boxes"][i] for t, (_, i) in zip(targets, indices)], axis=0)
+        _, src_boxes = outputs
+        _, tgt_boxes, tgt_valids = targets
+        src_ind, tgt_ind = indices  # (bs, num_pad_box),  (bs, num_pad_box)
 
-        loss_bbox = self.l1_loss(src_boxes, target_boxes)
+        num_valid_box = ops.reduce_sum(tgt_valids.astype(ms.float32))
+        bs, num_query, _= src_boxes.shape
+        _, num_pad_box = tgt_valids.shape
 
-        losses = {"loss_bbox": loss_bbox.sum() / num_boxes}
-        # (sum_instance, 4) -> (sum_instance, sum_instance) -> (sum_instance,)
-        loss_giou = 1 - generalized_box_iou(box_cxcywh_to_xyxy(src_boxes), box_cxcywh_to_xyxy(target_boxes)).diagonal()
+        src_ind = (src_ind + num_query) % num_query  # replace -1 with num_query-1
+        tgt_ind = (tgt_ind + num_pad_box) % num_pad_box  # replace -1 with num_pad_box-1
 
-        losses["loss_giou"] = loss_giou.sum() / num_boxes
+        # gather operator does not have batch operation
+        sorted_src_boxes = ops.zeros_like(tgt_boxes)  # (bs, num_pad_box, 4)
+        sorted_tgt_boxes = ops.zeros_like(tgt_boxes)  # (bs, num_pad_box, 4)
+        for i in range(bs):
+            sorted_src_boxes[i] = ops.gather(src_boxes[i], src_ind[i], 0)
+            sorted_tgt_boxes[i] = ops.gather(tgt_boxes[i], tgt_ind[i], 0)
+
+        loss_bbox = self.l1_loss(sorted_src_boxes, sorted_tgt_boxes)
+
+        loss_bbox *= tgt_valids.astype(ms.float32).reshape(bs, num_pad_box, 1)
+        losses = {"loss_bbox": loss_bbox.sum() / num_valid_box}
+
+        # (bs, num_pad_box, 4) -> (bs*num_pad_box, 4) -> (bs*num_pad_box, bs*num_pad_box) -> (bs*num_pad_box,)
+        loss_giou = 1 - generalized_box_iou(box_cxcywh_to_xyxy(sorted_src_boxes.reshape(bs*num_pad_box, -1)),
+                                            box_cxcywh_to_xyxy(sorted_tgt_boxes.reshape(bs*num_pad_box, -1))).diagonal()
+
+        loss_giou *= tgt_valids.astype(ms.float32).reshape(bs*num_pad_box)
+        losses["loss_giou"] = loss_giou.sum() / num_valid_box
 
         return losses
 
-    def _get_src_permutation_idx(self, indices):
-        # permute predictions following indices
-        # (sum_instance,) eg: [0,0,  1,1,1]
-        batch_idx = ops.concat([ms_np.full_like(src, i) for i, (src, _) in enumerate(indices)])
-        # (sum_instance,) eg: [7,10, 3,6,8]
-        src_idx = ops.concat([src for (src, _) in indices])
-        return batch_idx, src_idx
+    def get_loss(self, outputs, targets, indices):
+        losses = {}
+        losses.update(self.loss_labels(outputs, targets, indices))
+        losses.update(self.loss_boxes(outputs, targets, indices))
 
-    def get_loss(self, loss, outputs, targets, indices, num_boxes, **kwargs):
-        loss_map = {
-            "class": self.loss_labels,
-            "boxes": self.loss_boxes,
-        }
-        assert loss in loss_map, f"do you really want to compute {loss} loss?"
-        return loss_map[loss](outputs, targets, indices, num_boxes, **kwargs)
+        return losses
 
-    def construct(self, outputs, targets, return_indices=False):
+    def construct(self, outputs, targets):
         """
         This performs the loss computation.
         Parameters:
@@ -198,6 +211,10 @@ class SetCriterion(nn.Cell):
              return_indices: used for vis. if True, the layer0-5 indices will be returned as well.
 
         """
+        # TODO to finsh static part
+        raise NotImplementedError('not realize static part yet')
+
+        return_indices = False
         outputs_without_aux = {k: v for k, v in outputs.items() if k != "aux_outputs"}
 
         # Retrieve the matching between the outputs of the last layer and the targets
@@ -231,6 +248,13 @@ class SetCriterion(nn.Cell):
             return losses, indices_list
 
         return losses
+
+    def compute_weighted_loss(self, loss_dict):
+        for k in loss_dict.keys():
+            if k in self.weight_dict:
+                loss_dict[k] *= self.weight_dict[k]
+        loss = sum(loss_dict.values())
+        return loss
 
     def __repr__(self):
         head = "Criterion " + self.__class__.__name__

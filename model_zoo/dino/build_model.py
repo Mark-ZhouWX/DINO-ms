@@ -92,13 +92,12 @@ def build_dino(unit_test=False):
                 num_classes=num_classes,
                 num_queries=num_queries,
                 aux_loss=True,
-                criterion=criterion,
-                pixel_mean=[123.675, 116.280, 103.530],
-                pixel_std=[58.395, 57.120, 57.375],
                 select_box_nums_for_evaluation=300,
                 dn_number=dn_number,
                 label_noise_ratio=0.2,
                 box_noise_scale=1.0,
                 unit_test=unit_test,
                 )
-    return dino
+
+    return dino, criterion
+

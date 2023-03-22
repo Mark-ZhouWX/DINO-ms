@@ -49,9 +49,6 @@ class DINO(nn.Cell):
                  embed_dim: int,
                  num_classes: int,
                  num_queries: int,
-                 criterion: nn.Cell = None,
-                 pixel_mean: List[float] = [123.675, 116.280, 103.530],
-                 pixel_std: List[float] = [58.395, 57.120, 57.375],
                  aux_loss: bool = True,
                  select_box_nums_for_evaluation: int = 300,
                  dn_number: int = 100,
@@ -83,18 +80,12 @@ class DINO(nn.Cell):
 
         # define where to calculate auxiliary loss in criterion
         self.aux_loss = aux_loss
-        self.criterion = criterion
 
         # de-noising
         self.label_enc = nn.Embedding(num_classes, embed_dim)
         self.dn_number = dn_number
         self.label_noise_ratio = label_noise_ratio
         self.box_noise_scale = box_noise_scale
-
-        # normalizer for input raw images
-        pixel_mean = Tensor(pixel_mean).view(3, 1, 1)
-        pixel_std = Tensor(pixel_std).view(3, 1, 1)
-        self.normalizer = lambda x: (x - pixel_mean) / pixel_std
 
         # initialize weights
         prior_prob = 0.01
@@ -150,7 +141,7 @@ class DINO(nn.Cell):
 
         self.unit_test = unit_test
 
-    def construct(self, images, img_masks, *args):
+    def construct(self, images, img_masks, targets=None):
         """Forward function of `DINO` which excepts a list of dict as inputs.
 
         Args:
@@ -168,19 +159,9 @@ class DINO(nn.Cell):
                             dictionnaries containing the two above keys for each decoder layer.
         """
         if not self.unit_test:
-
-            if self.training:
-                # boxes already normalized to (0,1) in dataset
-                gt_bboxes, gt_labels, gt_valids = args[0], args[1], args[2]
-                # convert list to dict
-                targets = self.prepare_targets(gt_bboxes, gt_labels, gt_valids)
-            else:
-                batch_size, _, h, w = images.shape
-                targets = None
-
+            batch_size, _, h, w = images.shape
             # extract features with backbone
             features = self.backbone(images)
-
         else:  # test inference without backbone
             # npz_file = np.load('/data1/zhouwuxing/demo/resnet_fm.npz')
             # features = dict()
@@ -193,7 +174,7 @@ class DINO(nn.Cell):
             )
             # img_masks = ops.zeros((2, 423, 359), ms.float32)
             unpad_img_sizes = Tensor([(423, 359), (400, 300)])
-            targets = self.prepare_targets(args[0], args[1], args[2])
+            # targets = self.prepare_targets(args[0], args[1], args[2])
 
         # model_zoo backbone features to the embed dimension of transformer
         multi_level_feats = self.neck(features)  # list[b, embed_dim, h, w], len=num_level
@@ -263,108 +244,23 @@ class DINO(nn.Cell):
         if dn_meta is not None:
             outputs_class, outputs_coord = self.dn_post_process(outputs_class, outputs_coord, dn_meta)
 
+        # output (tuple(tuple(Tensor))) with size 3 -> last, aux, two_stage
+        output = [None, None, None]
+
         # prepare for loss computation
-        output = {"pred_logits": outputs_class[-1], "pred_boxes": outputs_coord[-1]}
+        output[0] = (outputs_class[-1], outputs_coord[-1])
         if self.aux_loss:
             # len(output["aux_outputs"]) = num_decoder_layer - 1
-            output["aux_outputs"] = self._set_aux_loss(outputs_class, outputs_coord)
+            output[1] = (outputs_class[:-1], outputs_coord[:-1])
 
         # prepare two stage output
         interm_coord = enc_reference
         # hack implementaion, the class_embed of the last layer of transformer.decoder serves for two stage
         # TODO 感觉这里可以写在transformer class里，直接输出interm_class，不知作者这么写是不是为了兼容其他的detr
         interm_class = self.transformer.decoder.class_embed[-1](enc_state)
-        output["enc_outputs"] = {"pred_logits": interm_class, "pred_boxes": interm_coord}
+        output[2] = (interm_class, interm_coord)
 
-        if self.training:
-            # visualize training samples
-            if self.vis_period > 0:
-                if self.vis_iter % self.vis_period == 0:
-                    box_cls = output["pred_logits"]
-                    box_pred = output["pred_boxes"]
-                    results = self.inference(box_cls, box_pred, images.image_sizes)
-                    self.visualize_training(batched_inputs, results)
-                self.vis_iter += 1
-
-            # TODO compute loss
-            assert self.criterion is not None, "criterion should not be None at training"
-            loss_dict = self.criterion(output, targets, dn_meta)
-            weight_dict = self.criterion.weight_dict
-            for k in loss_dict.keys():
-                if k in weight_dict:
-                    loss_dict[k] *= weight_dict[k]
-            loss = sum(loss_dict.values())
-            # if self.unit_test:
-            #     print(f'total loss', loss)
-            #     for k, v in loss_dict.items():
-            #         print(k, v)
-            return loss
-        else:
-            return output
-            # TODO output score bbox(normalized) and label
-            box_cls = output["pred_logits"]
-            box_pred = output["pred_boxes"]
-            results = self.inference(box_cls, box_pred, unpad_img_sizes)
-            processed_results = []
-            for results_per_image, input_per_image, image_size in zip(
-                    results, batched_inputs, unpad_img_sizes
-            ):
-                height = input_per_image.get("height", image_size[0])
-                width = input_per_image.get("width", image_size[1])
-                r = detector_postprocess(results_per_image, height, width)
-                processed_results.append({"instances": r})
-            return processed_results
-
-    def inference(self, box_cls, box_pred, image_sizes):
-        """
-                Arguments:
-                    box_cls (Tensor): tensor of shape (batch_size, num_queries, K).
-                        The tensor predicts the classification probability for each query.
-                    box_pred (Tensor): tensors of shape (batch_size, num_queries, 4).
-                        The tensor predicts 4-vector (x,y,w,h) box
-                        regression values for every queryx
-                    image_sizes (List[torch.Size]): the raw input image sizes without padding
-
-                Returns:
-                    results (List[Instances]): a list of #images elements.
-                """
-        assert len(box_cls) == len(image_sizes)
-        results = []
-        bs, num_query, num_class = box_cls.shape
-
-        # box_cls.shape: 1, 300, 80
-        # box_pred.shape: 1, 300, 4
-        prob = box_cls.sigmoid()
-        # TODO 不理解为什么如此选取topk，这样选取的bbox有许多重复的
-        # num_query*num_class must on the last axis
-        # (bs, num_query, num_class) -> (bs, num_query*num_class) -> (bs, eval_num) + (bs, eval_num)
-        topk_values, topk_indexes_full = ops.topk(
-            prob.view(bs, -1), self.select_box_nums_for_evaluation
-        )
-        scores = topk_values
-        # (bs, eval_num)
-        topk_boxes_ind = ops.div(topk_indexes_full.astype(ms.float32),
-                                 num_class, rounding_mode="floor").astype(ms.int32)
-
-        labels = topk_indexes_full % num_class  # (bs, eval_num)
-        boxes = ops.gather_elements(box_pred, 1, ms_np.tile(topk_boxes_ind.unsqueeze(-1), (1, 1, 4)))  # (bs,eval_num,4)
-
-        # For each box we assign the best class or the second best if the best on is `no_object`.
-        # scores, labels = F.softmax(box_cls, dim=-1)[:, :, :-1].max(-1)
-
-        for i, (scores_per_image, labels_per_image, box_pred_per_image, image_size) in enumerate(
-                zip(scores, labels, boxes, image_sizes)
-        ):
-            result = dict(image_size=image_size)
-            # (num_query, 4)
-            pred_boxes = box_cxcywh_to_xyxy(box_pred_per_image)
-            pred_boxes[:, 0::2] *= image_size[1]
-            pred_boxes[:, 1::2] *= image_size[0]
-            result.update(pred_boxes=pred_boxes)
-            result.update(scores=scores_per_image)
-            result.update(pred_classes=labels_per_image)
-            results.append(result)
-        return results
+        return output
 
     def dn_post_process(self, outputs_class, outputs_coord, dn_metas):
         """fill output_known bboxes and logits in dn_meta, separate predictions of gt and matching part"""

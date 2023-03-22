@@ -3,10 +3,11 @@ import os
 import cv2
 import mindspore as ms
 import numpy as np
-from mindspore import ParameterTuple, nn, ops, Tensor
+from mindspore import ParameterTuple, nn, ops, Tensor, amp
 
 from common.dataset.transform import get_size_with_aspect_ratio
 from common.detr.matcher.matcher import HungarianMatcher
+from common.engine import WithLossCell
 from common.utils.box_ops import box_xyxy_to_cxcywh
 from common.utils.preprocessing import pad_as_batch
 from common.utils.system import is_windows
@@ -150,6 +151,7 @@ def convert_input_format(batched_inputs):
     gt_classes_list = []
     gt_boxes_list = []
     gt_valids_list = []
+    num_pad_box = 5
     for targets_per_image in gt_instances:
         h, w = targets_per_image['image_size']
         image_size_xyxy = Tensor([w, h, w, h], dtype=ms.float32)
@@ -159,11 +161,19 @@ def convert_input_format(batched_inputs):
         new_targets.append({"labels": gt_classes, "boxes": gt_boxes})
 
         num_inst = len(gt_boxes)
-        gt_classes_list.append(gt_classes)
-        gt_boxes_list.append(gt_boxes)
-        gt_valids_list.append(ops.ones(num_inst, ms.bool_))
 
-    return images, img_masks, gt_classes_list, gt_boxes_list, gt_valids_list
+        np_gt_label = np.pad(gt_classes.asnumpy(), (0, num_pad_box - num_inst),
+                          mode="constant", constant_values=-1)
+        np_gt_valid = np.zeros((num_pad_box,))
+        np_gt_valid[:num_inst] = 1
+        np_gt_valid = np_gt_valid.astype(np.bool_)  # (pad_max_number) False keep, True drop
+        np_gt_box = np.pad(gt_boxes.asnumpy(), ((0, num_pad_box - num_inst), (0, 0)), mode="constant", constant_values=0)
+
+        gt_classes_list.append(Tensor(np_gt_label, ms.int32))
+        gt_boxes_list.append(Tensor(np_gt_box, ms.float32))
+        gt_valids_list.append(Tensor(np_gt_valid, ms.bool_))
+
+    return images, img_masks, ops.stack(gt_classes_list), ops.stack(gt_boxes_list), ops.stack(gt_valids_list)
 
 
 if __name__ == "__main__":
@@ -177,7 +187,7 @@ if __name__ == "__main__":
     pth_dir = r"C:\02Data\models" if is_windows else './pretrained_model/'
     ms_pth_path = os.path.join(pth_dir, "ms_dino_r50_4scale_12ep_49_2AP.ckpt")
 
-    dino = build_dino(unit_test=True)
+    network, criterion = build_dino(unit_test=True)
 
     # # set mix precision
     # dino.to_float(ms.float16)
@@ -185,14 +195,14 @@ if __name__ == "__main__":
     #     if isinstance(cell, (nn.BatchNorm1d, nn.BatchNorm2d, nn.BatchNorm3d, HungarianMatcher)):
     #         cell.to_float(ms.float32)
 
-    ms.load_checkpoint(ms_pth_path, dino)
+    ms.load_checkpoint(ms_pth_path, network)
 
     inputs, _ = get_input()
     images, img_masks, gt_classes_list, gt_boxes_list, gt_valids_list = convert_input_format(inputs)
-    inputs = images, img_masks, gt_boxes_list, gt_classes_list, gt_valids_list
+    inputs = images, img_masks, (gt_classes_list, gt_boxes_list, gt_valids_list)
     if infer:
-        dino.set_train(False)
-        inf_result = dino(inputs)
+        network.set_train(False)
+        inf_result = network(inputs)
         print('batch size', len(inf_result))
         for r in inf_result:
             r = r['instances']
@@ -202,19 +212,21 @@ if __name__ == "__main__":
             print("class shape", r['pred_classes'].shape)
 
     if train:
+        # network = amp.auto_mixed_precision(network, 'O0')
         # train
-        dino.set_train(True)
+        network.set_train(True)
 
-        weight = dino.trainable_params()
+        weight = network.trainable_params()
         optimizer = nn.SGD(weight, learning_rate=1e-3)
         # optimizer = nn.AdamWeightDecay(weight, learning_rate=1e-3, beta1=0.9, beta2=0.999, eps=1e-6, weight_decay=1e-4)
 
         # grad_fn = value_and_grad(forward, grad_position=None, weights=weight)
-        grad_fn = ops.GradOperation(get_by_list=True)(dino, ParameterTuple(weight))
+        model = WithLossCell(network, criterion)
+        grad_fn = ops.GradOperation(get_by_list=True)(model, ParameterTuple(weight))
 
-        show_grad_weight = False
+        show_grad_weight = True
         for k in range(10):
-            loss = dino(*inputs)
+            loss = model(*inputs)
             gradients = grad_fn(*inputs)
             print(f'loss of the {k} step', loss)
 
@@ -225,6 +237,7 @@ if __name__ == "__main__":
                         continue
                     print(name, grad.shape, grad.mean(), grad.reshape(-1)[:3],
                           weight[i].data.mean(), weight[i].data.reshape(-1)[:3])
+            # gradients = ops.clip_by_global_norm(gradients, clip_norm=0.1)
             optimizer(gradients)
 
     # train one step

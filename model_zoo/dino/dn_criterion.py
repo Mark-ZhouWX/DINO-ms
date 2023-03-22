@@ -29,51 +29,55 @@ class TwoStageCriterion(SetCriterion):
         )
         self.two_stage_binary_cls = two_stage_binary_cls
 
-    def construct(self, outputs, targets, **kwargs):
+    def construct(self, outputs, targets):
         """This performs the loss computation.
         Parameters:
-             outputs: dict of tensors, see the output specification of the model for the format
-             targets: list of dicts, such that len(targets) == batch_size.
-                      The expected keys in each dict depends on the losses applied, see each loss' doc
+             outputs (Tuple[Tuple[Tensor]]): predictions of last decoder, auxiliary, encoder, each prediction contains
+                                            a tuple with label and bbox.
+             targets (Tuple[Tensor]): target tuple contains gt label, box and valid_mask
+
+        Returns:
+             loss (tuple(Tensor): two_stage loss with size 3, (last, aux, encoder), each tensor contains three type of loss, (bbox, giou, class)
         """
+        self.compute_two_stage_loss(outputs, targets)
 
-        outputs_without_aux = {k: v for k, v in outputs.items() if k != "aux_outputs"}
 
+    def compute_two_stage_loss(self, outputs, targets):
+        outputs_last_encoder = outputs[0]
+        outputs_auxiliary =  outputs[1]
+        outputs_encoder = outputs[2]
         # Retrieve the matching between the outputs of the last layer and the targets
-        indices = self.matcher(outputs_without_aux, targets)  # [(ind_src, ind_tgt)], len(indices)=bs
-
-        # Compute the average number of target boxes across all nodes, for normalization purposes
-        num_boxes = sum(t["labels"].shape[0] for t in targets)
+        indices = self.matcher(outputs_last_encoder, targets)  # [(ind_src, ind_tgt)], len(indices)=bs
 
         # Compute all the requested losses
         losses = {}
-        for loss in self.losses:
-            losses.update(self.get_loss(loss, outputs, targets, indices, num_boxes))
+
+        # get 3 basic loss, label, bbox and giou
+        loss_last_decoder = self.get_loss(outputs_last_encoder, targets, indices)
+        losses.update(loss_last_decoder)
 
         # In case of auxiliary losses, we repeat this process with the output of each intermediate layer.
-        if "aux_outputs" in outputs:
-            for i, aux_outputs in enumerate(outputs["aux_outputs"]):
-                indices = self.matcher(aux_outputs, targets)
-                for loss in self.losses:
-                    l_dict = self.get_loss(loss, aux_outputs, targets, indices, num_boxes)
-                    l_dict = {k + f"_{i}": v for k, v in l_dict.items()}
-                    losses.update(l_dict)
+        if outputs_auxiliary is not None:
+            aux_len = len(outputs_auxiliary[0])
+            for i in range(aux_len):
+                aux_out = (outputs_auxiliary[0][i], outputs_auxiliary[1][i])
+                aux_ind = self.matcher(aux_out, targets)
+                loss_aux = self.get_loss(aux_out, targets, aux_ind)
+                l_dict = {k + f"_{i}": v for k, v in loss_aux.items()}
+                losses.update(l_dict)
 
         # for two stage
-        if "enc_outputs" in outputs:
-            enc_outputs = outputs["enc_outputs"]
+        if outputs_encoder is not None:
             if self.two_stage_binary_cls:
                 # reset target label, 0 means object, 1-79 no object
                 for bt in targets:
                     bt["labels"] = ops.zeros_like(bt["labels"])
-            indices = self.matcher(enc_outputs, targets)
-            for loss in self.losses:
-                l_dict = self.get_loss(loss, enc_outputs, targets, indices, num_boxes)
-                l_dict = {k + "_enc": v for k, v in l_dict.items()}
-                losses.update(l_dict)
+            enc_ind = self.matcher(outputs_encoder, targets)
+            loss_enc = self.get_loss(outputs_encoder, targets, enc_ind)
+            l_dict = {k + "_enc": v for k, v in loss_enc.items()}
+            losses.update(l_dict)
 
         return losses
-
 
 class DINOCriterion(TwoStageCriterion):
     """
@@ -91,19 +95,21 @@ class DINOCriterion(TwoStageCriterion):
                       The expected keys in each dict depends on the losses applied, see each loss' doc
              dn_metas: de-noising information, including dn predicts and dn_number, etc.
         """
-        losses = super(DINOCriterion, self).construct(outputs, targets)
-        num_boxes = sum(t["labels"].shape[0] for t in targets)  # total number of instances of a batch
+        # two_stage loss (tuple(Tensor)) with size 3 -> last, aux, encoder
+        # each tensor contains three type of loss -> bbox, giou, class
+        loss_dict = self.compute_two_stage_loss(outputs, targets)
 
         # Compute all the requested losses
-        aux_num = 0
-        if "aux_outputs" in outputs:
-            aux_num = len(outputs["aux_outputs"])
-        dn_losses = self.compute_dn_loss(dn_metas, targets, aux_num, num_boxes)
-        losses.update(dn_losses)
+        outputs_auxiliary = outputs[1]
+        aux_num = len(outputs_auxiliary[0]) if outputs_auxiliary is not None else 0
+        dn_loss_dict = self.compute_dn_loss(dn_metas, targets, aux_num)
+        loss_dict.update(dn_loss_dict)
 
-        return losses
+        weighted_loss = self.compute_weighted_loss(loss_dict)
 
-    def compute_dn_loss(self, dn_metas, targets, aux_num, num_boxes):
+        return weighted_loss
+
+    def compute_dn_loss(self, dn_metas, targets, aux_num):
         """
         compute dn loss in criterion
         Args:

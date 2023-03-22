@@ -39,7 +39,8 @@ def box_cxcywh_to_xyxy(bbox) -> Tensor:
     """
     cx, cy, w, h = ops.unstack(bbox, axis=-1)
     new_bbox = [(cx - 0.5 * w), (cy - 0.5 * h), (cx + 0.5 * w), (cy + 0.5 * h)]
-    aa = ops.stack(new_bbox, axis=0).transpose(1, 0)
+    # aa = ops.stack(new_bbox, axis=0).transpose(1, 0)
+    aa = ops.stack(new_bbox, axis=-1)
     return aa
     # return ops.stack(new_bbox, axis=-1)
 
@@ -177,7 +178,8 @@ def generalized_box_iou(boxes1, boxes2) -> Tensor:
     # so do an early check
 
     assert (boxes1[:, 2:] >= boxes1[:, :2]).all()
-    assert (boxes2[:, 2:] >= boxes2[:, :2]).reshape(boxes2.shape[0], 2).all()
+    # assert (boxes2[:, 2:] >= boxes2[:, :2]).reshape(boxes2.shape[0], 2).all()
+    assert (boxes2[:, 2:] >= boxes2[:, :2]).all()
     iou, union = box_iou(boxes1, boxes2)
 
     # area of box minimum exterior rectangle (MER)
