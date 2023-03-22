@@ -7,7 +7,7 @@ from mindspore import ParameterTuple, nn, ops, Tensor, amp
 
 from common.dataset.transform import get_size_with_aspect_ratio
 from common.detr.matcher.matcher import HungarianMatcher
-from common.engine import WithLossCell
+from common.engine import WithLossCell, TrainOneStepWithGradClipLossScaleCell
 from common.utils.box_ops import box_xyxy_to_cxcywh
 from common.utils.preprocessing import pad_as_batch
 from common.utils.system import is_windows
@@ -219,6 +219,22 @@ if __name__ == "__main__":
         weight = network.trainable_params()
         optimizer = nn.SGD(weight, learning_rate=1e-3)
         # optimizer = nn.AdamWeightDecay(weight, learning_rate=1e-3, beta1=0.9, beta2=0.999, eps=1e-6, weight_decay=1e-4)
+
+
+
+        model = WithLossCell(network, criterion)
+        # scale_sense = nn.DynamicLossScaleUpdateCell(loss_scale_value=2 ** 12, scale_factor=2, scale_window=1000)
+        # scale_sense = nn.DynamicLossScaleUpdateCell(loss_scale_value=2 ** 10, scale_factor=2, scale_window=50)
+        # scale_sense = nn.DynamicLossScaleUpdateCell(loss_scale_value=2 ** 8, scale_factor=2, scale_window=50)
+        scale_sense = nn.DynamicLossScaleUpdateCell(loss_scale_value=2 ** 14, scale_factor=2, scale_window=1000)
+        # scale_sense = Tensor(1.0)
+        model = TrainOneStepWithGradClipLossScaleCell(model, optimizer, scale_sense, grad_clip=False, clip_value=0.1)
+        for k in range(10):
+            loss, cond, scaling_sens = model(*inputs)
+            print(f'loss of the {k} step', loss, f'cond {cond}')
+
+        exit()
+
 
         # grad_fn = value_and_grad(forward, grad_position=None, weights=weight)
         model = WithLossCell(network, criterion)
