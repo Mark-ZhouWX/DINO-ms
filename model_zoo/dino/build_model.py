@@ -2,6 +2,7 @@ from mindspore import nn
 
 from common.detr.backbone.resnet import resnet50
 from common.detr.matcher.matcher import HungarianMatcher
+from common.detr.matcher.matcher_np import HungarianMatcherNumpy
 from common.detr.neck.channel_mapper import ChannelMapper
 from common.layers.position_embedding import PositionEmbeddingSine
 from model_zoo.dino.dino import DINO

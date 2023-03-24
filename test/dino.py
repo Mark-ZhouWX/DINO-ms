@@ -130,6 +130,8 @@ def convert_input_format_with_resizepad(batched_inputs):
 
 
 def convert_input_format(batched_inputs):
+    # batched_inputs = [batched_inputs[0]]
+    # batched_inputs = [batched_inputs[1]]
     batch_size = len(batched_inputs)
 
     # images
@@ -179,7 +181,7 @@ def convert_input_format(batched_inputs):
 if __name__ == "__main__":
     # set context
     ms.set_context(mode=ms.PYNATIVE_MODE, device_target='CPU' if is_windows else 'Ascend',
-                   pynative_synchronize=True, device_id=3)
+                   pynative_synchronize=True, device_id=1)
 
     train = True
     infer = False
@@ -222,18 +224,18 @@ if __name__ == "__main__":
 
 
 
-        model = WithLossCell(network, criterion)
-        # scale_sense = nn.DynamicLossScaleUpdateCell(loss_scale_value=2 ** 12, scale_factor=2, scale_window=1000)
-        # scale_sense = nn.DynamicLossScaleUpdateCell(loss_scale_value=2 ** 10, scale_factor=2, scale_window=50)
-        # scale_sense = nn.DynamicLossScaleUpdateCell(loss_scale_value=2 ** 8, scale_factor=2, scale_window=50)
-        scale_sense = nn.DynamicLossScaleUpdateCell(loss_scale_value=2 ** 14, scale_factor=2, scale_window=1000)
-        # scale_sense = Tensor(1.0)
-        model = TrainOneStepWithGradClipLossScaleCell(model, optimizer, scale_sense, grad_clip=False, clip_value=0.1)
-        for k in range(10):
-            loss, cond, scaling_sens = model(*inputs)
-            print(f'loss of the {k} step', loss, f'cond {cond}')
-
-        exit()
+        # model = WithLossCell(network, criterion)
+        # # scale_sense = nn.DynamicLossScaleUpdateCell(loss_scale_value=2 ** 12, scale_factor=2, scale_window=1000)
+        # # scale_sense = nn.DynamicLossScaleUpdateCell(loss_scale_value=2 ** 10, scale_factor=2, scale_window=50)
+        # # scale_sense = nn.DynamicLossScaleUpdateCell(loss_scale_value=2 ** 8, scale_factor=2, scale_window=50)
+        # scale_sense = nn.DynamicLossScaleUpdateCell(loss_scale_value=2 ** 14, scale_factor=2, scale_window=1000)
+        # # scale_sense = Tensor(1.0)
+        # model = TrainOneStepWithGradClipLossScaleCell(model, optimizer, scale_sense, grad_clip=False, clip_value=0.1)
+        # for k in range(10):
+        #     loss, cond, scaling_sens = model(*inputs)
+        #     print(f'loss of the {k} step', loss, f'cond {cond}')
+        #
+        # exit()
 
 
         # grad_fn = value_and_grad(forward, grad_position=None, weights=weight)
@@ -241,15 +243,17 @@ if __name__ == "__main__":
         grad_fn = ops.GradOperation(get_by_list=True)(model, ParameterTuple(weight))
 
         show_grad_weight = True
-        for k in range(10):
+        for k in range(200):
             loss = model(*inputs)
-            gradients = grad_fn(*inputs)
             print(f'loss of the {k} step', loss)
+            gradients = grad_fn(*inputs)
+
 
             if show_grad_weight:
                 for i, grad in enumerate(gradients):
                     name = weight[i].name
                     if not name.startswith('neck.convs.2.norm.gamma'):
+                    # if not name.startswith('bbox_embed.6.layers.2.weight'):
                         continue
                     print(name, grad.shape, grad.mean(), grad.reshape(-1)[:3],
                           weight[i].data.mean(), weight[i].data.reshape(-1)[:3])
@@ -257,4 +261,4 @@ if __name__ == "__main__":
             optimizer(gradients)
 
     # train one step
-    pass
+    print(f'finished')

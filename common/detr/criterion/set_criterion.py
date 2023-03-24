@@ -101,25 +101,47 @@ class SetCriterion(nn.Cell):
 
         src_logits, _ = outputs  # (bs, num_query, num_class),
         tgt_labels, _, tgt_valids = targets
+        # print(f'src logits, {outputs[0].max()}, {outputs[0].min()}')
+        # print(f'src bboxes, {outputs[1].max()}, {outputs[1].min()}')
+        # print(f'tgt_labels, {targets[0].astype(ms.float32).max()}, {targets[0].astype(ms.float32).min()}')
+        # print(f'tgt_bboxes, {targets[1].max()}, {targets[1].min()}')
         tgt_labels *= tgt_valids.astype(ms.int32)
         tgt_labels += ops.logical_not(tgt_valids).astype(ms.int32) * self.num_classes  # replace unvalid with num_class
 
         bs, num_pad_box = tgt_valids.shape
         num_valid_box = ops.reduce_sum(tgt_valids.astype(ms.float32))
-
+        # print(f'label num reduce_sum {num_valid_box}')
         _, num_query, num_class = src_logits.shape
 
         # Assign gt label to all queries, the label of 'no object' is num_class
         src_ind, tgt_ind = indices  # (bs, num_pad_box),  (bs, num_pad_box)
         src_ind = (src_ind + num_query) % num_query  # replace -1 with num_query-1
         tgt_ind = (tgt_ind + num_pad_box) % num_pad_box  # replace -1 with num_pad_box-1
+        # print(f'src_ind before, {indices[0].astype(ms.float32).max()}, {indices[0].astype(ms.float32).min()}')
+        # print(f'src_ind after, {src_ind.astype(ms.float32).max()}, {src_ind.astype(ms.float32).min()}')
+        # print(f'tgt_ind before, {indices[1].astype(ms.float32).max()}, {indices[1].astype(ms.float32).min()}')
+        # print(f'tgt_ind after, {tgt_ind.astype(ms.float32).max()}, {tgt_ind.astype(ms.float32).min()}')
 
         # (bs, num_query)  value=80
         target_classes = ms_np.full((bs, num_query), self.num_classes, dtype=ms.float32)
-        for i in range(bs):
-            one_tc =ops.gather(tgt_labels[i].astype(ms.float32), tgt_ind[i], 0)  # (bs, num_pad_box)
-            target_classes[i] = ops.scatter_update(target_classes[i], src_ind[i], one_tc)
-        target_classes = target_classes.astype(ms.int32)
+        # for i in range(bs):
+        #     one_tc =ops.gather(tgt_labels[i].astype(ms.float32), tgt_ind[i], 0)  # (bs, num_pad_box)
+        #     target_classes[i] = ops.scatter_update(target_classes[i], src_ind[i], one_tc)
+        # target_classes = target_classes.astype(ms.int32)
+
+
+        # one_tc = ops.gather(tgt_labels[0].astype(ms.float32), tgt_ind[0], 0)  # (bs, num_pad_box)
+        # target_classes = ops.scatter_update(target_classes[0], src_ind[0], one_tc).expand_dims(0)
+        # target_classes = target_classes.astype(ms.int32)
+
+        # tc = ops.gather(tgt_labels, tgt_ind.reshape(bs*num_pad_box), axis=1).reshape(bs, bs, num_pad_box).diagonal().transpose(1, 0)  # (bs, num_pad_box)
+        # src_ind  # bs, num_pad_box
+        # target_classes = ms_np.full((bs, num_query), self.num_classes, dtype=ms.float32)
+        # help_factor = ops.arange(bs).reshape(bs, 1).repeat(1, num_pad_box).reshape(bs*num_pad_box) * num_query
+        sorted_tc = ops.gather_elements(tgt_labels, dim=1, index=tgt_ind).astype(ms.float32)
+        target_classes = ops.tensor_scatter_elements(target_classes, indices=src_ind, updates=sorted_tc, axis=1).astype(ms.int32)
+
+
 
         # Computation classification loss
         if self.loss_class_type == "ce_loss":
@@ -166,6 +188,9 @@ class SetCriterion(nn.Cell):
         src_ind, tgt_ind = indices  # (bs, num_pad_box),  (bs, num_pad_box)
 
         num_valid_box = ops.reduce_sum(tgt_valids.astype(ms.float32))
+        # num_valid_box = tgt_valids.astype(ms.float32).sum()
+        # num_valid_box = Tensor(5.0, ms.float32)
+        # print(f'bbox num reduce_sum {num_valid_box}')
         bs, num_query, _= src_boxes.shape
         _, num_pad_box = tgt_valids.shape
 
@@ -173,11 +198,24 @@ class SetCriterion(nn.Cell):
         tgt_ind = (tgt_ind + num_pad_box) % num_pad_box  # replace -1 with num_pad_box-1
 
         # gather operator does not have batch operation
-        sorted_src_boxes = ops.zeros_like(tgt_boxes)  # (bs, num_pad_box, 4)
-        sorted_tgt_boxes = ops.zeros_like(tgt_boxes)  # (bs, num_pad_box, 4)
-        for i in range(bs):
-            sorted_src_boxes[i] = ops.gather(src_boxes[i], src_ind[i], 0)
-            sorted_tgt_boxes[i] = ops.gather(tgt_boxes[i], tgt_ind[i], 0)
+        # sorted_src_boxes = ops.zeros_like(tgt_boxes)  # (bs, num_pad_box, 4)
+        # sorted_tgt_boxes = ops.zeros_like(tgt_boxes)  # (bs, num_pad_box, 4)
+        # for i in range(bs):
+        #     sorted_src_boxes[i] = ops.gather(src_boxes[i], src_ind[i], 0)
+        #     sorted_tgt_boxes[i] = ops.gather(tgt_boxes[i], tgt_ind[i], 0)
+
+
+        # sorted_src_boxes = ops.gather(src_boxes[0], src_ind[0], 0).expand_dims(0)
+        # sorted_tgt_boxes = ops.gather(tgt_boxes[0], tgt_ind[0], 0).expand_dims(0)
+
+        # (bs, num_query, 4) gather (bs*num_pad_box, 4) -> (bs, bs*num_pad_box, 4)
+        # sorted_src_boxes = ops.gather(src_boxes, src_ind.reshape(bs*num_pad_box), axis=1).\
+        #     reshape(bs, bs, num_pad_box, 4).diagonal().transpose(2, 0, 1)
+        # sorted_tgt_boxes = ops.gather(tgt_boxes, tgt_ind.reshape(bs*num_pad_box), axis=1).\
+        #     reshape(bs, bs, num_pad_box, 4).diagonal().transpose(2, 0, 1)
+        sorted_src_boxes = ops.gather_elements(src_boxes, dim=1, index=ms_np.tile(ops.expand_dims(src_ind, -1), (1, 1, 4)))
+        sorted_tgt_boxes = ops.gather_elements(tgt_boxes, dim=1, index=ms_np.tile(ops.expand_dims(tgt_ind, -1), (1, 1, 4)))
+
 
         loss_bbox = self.l1_loss(sorted_src_boxes, sorted_tgt_boxes)
 
@@ -255,6 +293,9 @@ class SetCriterion(nn.Cell):
                 loss_dict[k] *= self.weight_dict[k]
         loss = sum(loss_dict.values())
         return loss
+
+    # def get_matched_target(self):
+
 
     def __repr__(self):
         head = "Criterion " + self.__class__.__name__
