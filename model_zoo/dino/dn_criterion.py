@@ -22,10 +22,11 @@ class TwoStageCriterion(SetCriterion):
         loss_class_type="focal_loss",
         alpha: float = 0.25,
         gamma: float = 2,
+        use_np_mather: bool = False,
         two_stage_binary_cls=False,
     ):
         super().__init__(
-            num_classes, matcher, weight_dict, losses, eos_coef, loss_class_type, alpha, gamma
+            num_classes, matcher, weight_dict, losses, eos_coef, loss_class_type, alpha, gamma, use_np_mather
         )
         self.two_stage_binary_cls = two_stage_binary_cls
 
@@ -47,13 +48,13 @@ class TwoStageCriterion(SetCriterion):
         outputs_auxiliary =  outputs[1]
         outputs_encoder = outputs[2]
         # Retrieve the matching between the outputs of the last layer and the targets
-        indices = self.matcher(outputs_last_encoder, targets)  # [(ind_src, ind_tgt)], len(indices)=bs
+        # indices = self.matcher(outputs_last_encoder, targets)  # [(ind_src, ind_tgt)], len(indices)=bs
 
         # Compute all the requested losses
         losses = {}
 
         # get 3 basic loss, label, bbox and giou
-        loss_last_decoder = self.get_loss(outputs_last_encoder, targets, indices)
+        loss_last_decoder = self.get_loss(outputs_last_encoder, self.get_matched_target(outputs_last_encoder, targets))
         losses.update(loss_last_decoder)
 
         # In case of auxiliary losses, we repeat this process with the output of each intermediate layer.
@@ -61,8 +62,7 @@ class TwoStageCriterion(SetCriterion):
             aux_len = len(outputs_auxiliary[0])
             for i in range(aux_len):
                 aux_out = (outputs_auxiliary[0][i], outputs_auxiliary[1][i])
-                aux_ind = self.matcher(aux_out, targets)
-                loss_aux = self.get_loss(aux_out, targets, aux_ind)
+                loss_aux = self.get_loss(aux_out, self.get_matched_target(aux_out, targets))
                 l_dict = {k + f"_{i}": v for k, v in loss_aux.items()}
                 losses.update(l_dict)
 
@@ -72,8 +72,7 @@ class TwoStageCriterion(SetCriterion):
                 # reset target label, 0 means object, 1-79 no object
                 for bt in targets:
                     bt["labels"] = ops.zeros_like(bt["labels"])
-            enc_ind = self.matcher(outputs_encoder, targets)
-            loss_enc = self.get_loss(outputs_encoder, targets, enc_ind)
+            loss_enc = self.get_loss(outputs_encoder, self.get_matched_target(outputs_encoder, targets))
             l_dict = {k + "_enc": v for k, v in loss_enc.items()}
             losses.update(l_dict)
 

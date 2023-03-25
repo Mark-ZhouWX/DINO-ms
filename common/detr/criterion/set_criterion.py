@@ -3,7 +3,7 @@ from typing import List
 import mindspore as ms
 import mindspore.numpy as ms_np
 from mindspore import nn, ops, Tensor
-
+import numpy as np
 from common.utils.box_ops import box_cxcywh_to_xyxy, generalized_box_iou
 
 
@@ -60,6 +60,7 @@ class SetCriterion(nn.Cell):
             loss_class_type: str = "focal_loss",
             alpha: float = 0.25,
             gamma: float = 2.0,
+            use_np_mather: bool = False,
     ):
         """Create the criterion.
         Parameters:
@@ -78,6 +79,7 @@ class SetCriterion(nn.Cell):
         self.gamma = gamma
         self.eos_coef = eos_coef
         self.loss_class_type = loss_class_type
+        self.use_np_mather = use_np_mather
         assert loss_class_type in [
             "ce_loss",
             "focal_loss",
@@ -90,7 +92,7 @@ class SetCriterion(nn.Cell):
             self.empty_weight = empty_weight
         self.l1_loss = nn.L1Loss(reduction="none")
 
-    def loss_labels(self, outputs, targets, indices):
+    def loss_labels(self, src_logits, tgt_labels, tgt_valids):
         """
         Classification loss (Binary focal loss)
         outputs (Tuple[Tensor]): predictions, contains logits and bbox.
@@ -98,72 +100,35 @@ class SetCriterion(nn.Cell):
         indices (List[Tuple[Tensor, Tensor]]): list with length batch_size, each element
                                                 is the indices of source query and target bbox.
         """
-
-        src_logits, _ = outputs  # (bs, num_query, num_class),
-        tgt_labels, _, tgt_valids = targets
         # print(f'src logits, {outputs[0].max()}, {outputs[0].min()}')
         # print(f'src bboxes, {outputs[1].max()}, {outputs[1].min()}')
         # print(f'tgt_labels, {targets[0].astype(ms.float32).max()}, {targets[0].astype(ms.float32).min()}')
         # print(f'tgt_bboxes, {targets[1].max()}, {targets[1].min()}')
-        tgt_labels *= tgt_valids.astype(ms.int32)
-        tgt_labels += ops.logical_not(tgt_valids).astype(ms.int32) * self.num_classes  # replace unvalid with num_class
-
-        bs, num_pad_box = tgt_valids.shape
         num_valid_box = ops.reduce_sum(tgt_valids.astype(ms.float32))
         # print(f'label num reduce_sum {num_valid_box}')
         _, num_query, num_class = src_logits.shape
 
-        # Assign gt label to all queries, the label of 'no object' is num_class
-        src_ind, tgt_ind = indices  # (bs, num_pad_box),  (bs, num_pad_box)
-        src_ind = (src_ind + num_query) % num_query  # replace -1 with num_query-1
-        tgt_ind = (tgt_ind + num_pad_box) % num_pad_box  # replace -1 with num_pad_box-1
-        # print(f'src_ind before, {indices[0].astype(ms.float32).max()}, {indices[0].astype(ms.float32).min()}')
-        # print(f'src_ind after, {src_ind.astype(ms.float32).max()}, {src_ind.astype(ms.float32).min()}')
-        # print(f'tgt_ind before, {indices[1].astype(ms.float32).max()}, {indices[1].astype(ms.float32).min()}')
-        # print(f'tgt_ind after, {tgt_ind.astype(ms.float32).max()}, {tgt_ind.astype(ms.float32).min()}')
-
-        # (bs, num_query)  value=80
-        target_classes = ms_np.full((bs, num_query), self.num_classes, dtype=ms.float32)
-        # for i in range(bs):
-        #     one_tc =ops.gather(tgt_labels[i].astype(ms.float32), tgt_ind[i], 0)  # (bs, num_pad_box)
-        #     target_classes[i] = ops.scatter_update(target_classes[i], src_ind[i], one_tc)
-        # target_classes = target_classes.astype(ms.int32)
-
-
-        # one_tc = ops.gather(tgt_labels[0].astype(ms.float32), tgt_ind[0], 0)  # (bs, num_pad_box)
-        # target_classes = ops.scatter_update(target_classes[0], src_ind[0], one_tc).expand_dims(0)
-        # target_classes = target_classes.astype(ms.int32)
-
-        # tc = ops.gather(tgt_labels, tgt_ind.reshape(bs*num_pad_box), axis=1).reshape(bs, bs, num_pad_box).diagonal().transpose(1, 0)  # (bs, num_pad_box)
-        # src_ind  # bs, num_pad_box
-        # target_classes = ms_np.full((bs, num_query), self.num_classes, dtype=ms.float32)
-        # help_factor = ops.arange(bs).reshape(bs, 1).repeat(1, num_pad_box).reshape(bs*num_pad_box) * num_query
-        sorted_tc = ops.gather_elements(tgt_labels, dim=1, index=tgt_ind).astype(ms.float32)
-        target_classes = ops.tensor_scatter_elements(target_classes, indices=src_ind, updates=sorted_tc, axis=1).astype(ms.int32)
-
-
-
         # Computation classification loss
         if self.loss_class_type == "ce_loss":
             # TODO to check transpose, why
-            loss_class = ops.cross_entropy(ops.transpose(src_logits, (0, 2, 1)), target_classes, self.empty_weight)
+            loss_class = ops.cross_entropy(ops.transpose(src_logits, (0, 2, 1)), tgt_labels, self.empty_weight)
         elif self.loss_class_type == "focal_loss":
             # src_logits: (b, num_queries, num_classes) = (2, 300, 80)
             # target_classes_one_hot = (2, 300, 80)
-            target_classes_onehot = ops.zeros((bs, num_query, num_class + 1), ms.float32)
-            ones = ops.ones_like(ops.expand_dims(target_classes, -1)).astype(ms.float32)
-            target_classes_onehot = ops.tensor_scatter_elements(target_classes_onehot,
-                                                                ops.expand_dims(target_classes, -1), ones, axis=2)
-            target_classes_onehot = target_classes_onehot[:, :, :-1]
+            # target_classes_onehot = ops.zeros((bs, num_query, num_class + 1), ms.float32)
+            # ones = ops.ones_like(ops.expand_dims(tgt_labels, -1)).astype(ms.float32)
+            # target_classes_onehot = ops.tensor_scatter_elements(target_classes_onehot,
+            #                                                     ops.expand_dims(tgt_labels, -1), ones, axis=2)
+            # target_classes_onehot = target_classes_onehot[:, :, :-1]
 
             # TODO better use this
-            # target_classes_onehot = ops.one_hot(target_classes,
-            #                                     depth=num_class + 1, on_value=Tensor(1), off_value=Tensor(0))[:, :, :-1]
+            target_classes_onehot = ops.one_hot(tgt_labels,
+                                                depth=num_class + 1, on_value=Tensor(1), off_value=Tensor(0))[:, :, :-1]
 
             loss_class = (
                     sigmoid_focal_loss(
                         src_logits,
-                        target_classes_onehot,
+                        target_classes_onehot.astype(ms.float32),
                         num_boxes=num_valid_box,
                         alpha=self.alpha,
                         gamma=self.gamma,
@@ -177,64 +142,39 @@ class SetCriterion(nn.Cell):
 
         return losses
 
-    def loss_boxes(self, outputs, targets, indices):
+    def loss_boxes(self, src_boxes, tgt_boxes, tgt_valids):
         """
         Compute the losses related to the bounding boxes, the L1 regression loss and the GIoU loss
         targets dicts must contain the key "boxes" containing a tensor of dim [nb_target_boxes, 4]
         The target boxes are expected in format (center_x, center_y, w, h), normalized by the image size.
         """
-        _, src_boxes = outputs
-        _, tgt_boxes, tgt_valids = targets
-        src_ind, tgt_ind = indices  # (bs, num_pad_box),  (bs, num_pad_box)
-
         num_valid_box = ops.reduce_sum(tgt_valids.astype(ms.float32))
         # num_valid_box = tgt_valids.astype(ms.float32).sum()
         # num_valid_box = Tensor(5.0, ms.float32)
         # print(f'bbox num reduce_sum {num_valid_box}')
         bs, num_query, _= src_boxes.shape
-        _, num_pad_box = tgt_valids.shape
-
-        src_ind = (src_ind + num_query) % num_query  # replace -1 with num_query-1
-        tgt_ind = (tgt_ind + num_pad_box) % num_pad_box  # replace -1 with num_pad_box-1
-
-        # gather operator does not have batch operation
-        # sorted_src_boxes = ops.zeros_like(tgt_boxes)  # (bs, num_pad_box, 4)
-        # sorted_tgt_boxes = ops.zeros_like(tgt_boxes)  # (bs, num_pad_box, 4)
-        # for i in range(bs):
-        #     sorted_src_boxes[i] = ops.gather(src_boxes[i], src_ind[i], 0)
-        #     sorted_tgt_boxes[i] = ops.gather(tgt_boxes[i], tgt_ind[i], 0)
 
 
-        # sorted_src_boxes = ops.gather(src_boxes[0], src_ind[0], 0).expand_dims(0)
-        # sorted_tgt_boxes = ops.gather(tgt_boxes[0], tgt_ind[0], 0).expand_dims(0)
+        loss_bbox = self.l1_loss(src_boxes, tgt_boxes)
 
-        # (bs, num_query, 4) gather (bs*num_pad_box, 4) -> (bs, bs*num_pad_box, 4)
-        # sorted_src_boxes = ops.gather(src_boxes, src_ind.reshape(bs*num_pad_box), axis=1).\
-        #     reshape(bs, bs, num_pad_box, 4).diagonal().transpose(2, 0, 1)
-        # sorted_tgt_boxes = ops.gather(tgt_boxes, tgt_ind.reshape(bs*num_pad_box), axis=1).\
-        #     reshape(bs, bs, num_pad_box, 4).diagonal().transpose(2, 0, 1)
-        sorted_src_boxes = ops.gather_elements(src_boxes, dim=1, index=ms_np.tile(ops.expand_dims(src_ind, -1), (1, 1, 4)))
-        sorted_tgt_boxes = ops.gather_elements(tgt_boxes, dim=1, index=ms_np.tile(ops.expand_dims(tgt_ind, -1), (1, 1, 4)))
-
-
-        loss_bbox = self.l1_loss(sorted_src_boxes, sorted_tgt_boxes)
-
-        loss_bbox *= tgt_valids.astype(ms.float32).reshape(bs, num_pad_box, 1)
+        loss_bbox *= tgt_valids.astype(ms.float32).reshape(bs, num_query, 1)
         losses = {"loss_bbox": loss_bbox.sum() / num_valid_box}
 
-        # (bs, num_pad_box, 4) -> (bs*num_pad_box, 4) -> (bs*num_pad_box, bs*num_pad_box) -> (bs*num_pad_box,)
-        loss_giou = 1 - generalized_box_iou(box_cxcywh_to_xyxy(sorted_src_boxes.reshape(bs*num_pad_box, -1)),
-                                            box_cxcywh_to_xyxy(sorted_tgt_boxes.reshape(bs*num_pad_box, -1))).diagonal()
+        # (bs, num_query, 4) -> (bs*num_query, 4) -> (bs*num_query, bs*num_query) -> (bs*num_query,)
+        loss_giou = 1 - generalized_box_iou(box_cxcywh_to_xyxy(src_boxes.reshape(bs*num_query, -1)),
+                                            box_cxcywh_to_xyxy(tgt_boxes.reshape(bs*num_query, -1))).diagonal()
 
-        loss_giou *= tgt_valids.astype(ms.float32).reshape(bs*num_pad_box)
+        loss_giou *= tgt_valids.astype(ms.float32).reshape(bs*num_query)
         losses["loss_giou"] = loss_giou.sum() / num_valid_box
 
         return losses
 
-    def get_loss(self, outputs, targets, indices):
+    def get_loss(self, outputs, targets):
         losses = {}
-        losses.update(self.loss_labels(outputs, targets, indices))
-        losses.update(self.loss_boxes(outputs, targets, indices))
+        src_logits, src_boxes = outputs  # (bs, num_query, num_class),
+        target_labels, target_boxes, target_valids = targets # (bs, num_query, None/4/None)
+        losses.update(self.loss_labels(src_logits, target_labels, target_valids))
+        losses.update(self.loss_boxes(src_boxes, target_boxes, target_valids))
 
         return losses
 
@@ -294,8 +234,104 @@ class SetCriterion(nn.Cell):
         loss = sum(loss_dict.values())
         return loss
 
-    # def get_matched_target(self):
+    def get_matched_target(self, outputs, targets):
+        """
+        get matched targets, including classes amd boxes and their valid masks
+        Parameters:
+            outputs (Tuple[Tensor]): pred_logits and pred_boxes
+            targets (Tuple[Tensor]): raw target classes and boxes
+        Returns:
+            tgt_labels (Tensor[bs, num_query]): matched target classes
+            tgt_boxes (Tensor[bs, num_query, 4]): matched target boxes
+            target_valids (Tensor[bs, num_query]): valid mask of target matches
+        """
+        if self.use_np_mather:
+            return self._get_matched_target_numpy(outputs, targets)
+        else:
+            return self._get_matched_target_mindspore(outputs, targets)
 
+    def _get_matched_target_mindspore(self, outputs, targets):
+        def _replace_invalid(inputs, v_mask, value):
+            res = inputs * v_mask.astype(ms.int32)
+            res += ops.logical_not(v_mask).astype(ms.int32) * value  # replace invalid with given value
+            return res
+
+        pred_logts = outputs[0].shape
+        raw_tgt_labels, raw_tgt_boxes, valid_mask = targets  # (bs, num_pad)
+        bs, num_query, num_class = pred_logts
+        _, num_pad_box = raw_tgt_labels.shape
+        src_ind, tgt_ind = self.matcher(outputs, targets)  # (bs, num_pad_box)
+
+        src_ind = _replace_invalid(src_ind, valid_mask, num_query-1)  # replace invalid with num_query-1
+        tgt_ind = _replace_invalid(tgt_ind, valid_mask, num_pad_box-1)  # replace invalid with num_query-1
+
+        # Labels
+        raw_tgt_labels = _replace_invalid(raw_tgt_labels, valid_mask, num_class)  # replace unvalid with num_class
+
+        tgt_labels = ms_np.full((bs, num_query), num_class, dtype=ms.float32)  # (bs, num_query)
+        sorted_tl = ops.gather_elements(raw_tgt_labels, dim=1, index=tgt_ind).astype(ms.float32)
+        tgt_labels = ops.tensor_scatter_elements(tgt_labels, indices=src_ind, updates=sorted_tl, axis=1).astype(ms.int32)
+
+        # Boxes
+        tgt_boxes = ms_np.full((bs, num_query, 4), 0.0, dtype=ms.float32)
+        sorted_tb = ops.gather_elements(raw_tgt_boxes, dim=1,
+                                               index=ms_np.tile(ops.expand_dims(tgt_ind, -1), (1, 1, 4)))
+        tgt_boxes = ops.tensor_scatter_elements(tgt_boxes, indices=ms_np.tile(ops.expand_dims(src_ind, -1), (1, 1, 4)),
+                                                updates=sorted_tb, axis=1)
+
+        # valid_mask
+        tgt_valids = ops.zeros((bs, num_query), ms.int8)
+        tgt_valids = ops.tensor_scatter_elements(tgt_valids, indices=src_ind, updates=valid_mask.astype(ms.int8), axis=1).astype(ms.bool_)
+
+        return tgt_labels, tgt_boxes, tgt_valids
+    def _get_matched_target_numpy(self, outputs, targets):
+        def _replace_invalid(inputs, v_mask, value):
+            dtype = inputs.dtype
+            res = inputs * v_mask.astype(dtype)
+            res += np.logical_not(v_mask).astype(dtype) * value  # replace invalid with given value
+            return res
+        def _np_gather_elements(inputs, dim, index):
+            assert dim == 1, 'only support dim=1'
+            args = np.arange(inputs.shape[0]).reshape(-1, 1)
+            res = inputs[args, index]
+            return res
+        def _np_scatter_elements(inputs, indices, updates, axis):
+            assert axis == 1
+            args = np.arange(inputs.shape[0]).reshape(-1, 1)
+            inputs[args, indices] = updates
+            return inputs
+
+        pred_logts = outputs[0].shape
+        raw_tgt_labels, raw_tgt_boxes, valid_mask = targets  # (bs, num_pad)
+        bs, num_query, num_class = pred_logts
+        _, num_pad_box = raw_tgt_labels.shape
+        src_ind, tgt_ind = self.matcher(outputs, targets)  # (bs, num_pad_box)
+
+        src_ind, tgt_ind= src_ind.asnumpy(), tgt_ind.asnumpy()
+        raw_tgt_labels, raw_tgt_boxes, valid_mask = raw_tgt_labels.asnumpy(), raw_tgt_boxes.asnumpy(), valid_mask.asnumpy()
+
+        src_ind = _replace_invalid(src_ind, valid_mask, num_query-1)  # replace invalid with num_query-1
+        tgt_ind = _replace_invalid(tgt_ind, valid_mask, num_pad_box-1)  # replace invalid with num_pad_box-1
+
+        # Labels
+        raw_tgt_labels = _replace_invalid(raw_tgt_labels, valid_mask, num_class)  # replace invalid with num_class
+
+        tgt_labels = np.full((bs, num_query), num_class, dtype=np.int32)  # (bs, num_query)
+        sorted_tl = _np_gather_elements(raw_tgt_labels, dim=1, index=tgt_ind).astype(np.int32)
+        tgt_labels = _np_scatter_elements(tgt_labels, indices=src_ind, updates=sorted_tl, axis=1)
+
+        # Boxes
+        tgt_boxes = np.full((bs, num_query, 4), 0.0, dtype=np.float32)
+        sorted_tb = _np_gather_elements(raw_tgt_boxes, dim=1, index=tgt_ind)
+        tgt_boxes = _np_scatter_elements(tgt_boxes, indices=src_ind, updates=sorted_tb, axis=1)
+
+        # valid_mask
+        tgt_valids = np.zeros((bs, num_query), np.bool)
+        tgt_valids = _np_scatter_elements(tgt_valids, indices=src_ind, updates=valid_mask, axis=1)
+
+        return ops.stop_gradient(Tensor(tgt_labels, ms.int32)), \
+               ops.stop_gradient(Tensor(tgt_boxes, ms.float32)), \
+               ops.stop_gradient(Tensor(tgt_valids, ms.bool_))
 
     def __repr__(self):
         head = "Criterion " + self.__class__.__name__

@@ -14,6 +14,7 @@ def build_dino(unit_test=False):
     num_classes = 80
     num_queries = 900
     dn_number = 0 if unit_test else 100
+    use_np_mather = False
     # build model
     backbone = resnet50(
         in_channels=3,
@@ -62,9 +63,10 @@ def build_dino(unit_test=False):
         two_stage_num_proposals=num_queries,
     )
 
+    matcher = HungarianMatcherNumpy if use_np_mather else HungarianMatcher
     criterion = DINOCriterion(
         num_classes=num_classes,
-        matcher=HungarianMatcher(
+        matcher=matcher(
             cost_class=2.0,
             cost_bbox=5.0,
             cost_giou=2.0,
@@ -84,6 +86,7 @@ def build_dino(unit_test=False):
         alpha=0.25,
         gamma=2.0,
         two_stage_binary_cls=False,
+        use_np_mather=use_np_mather,
     )
     dino = DINO(backbone,
                 position_embedding,
