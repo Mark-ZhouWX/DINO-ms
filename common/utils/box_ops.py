@@ -134,9 +134,12 @@ def box_intersection(boxes1, boxes2) -> Tensor:
     broadcast1 = ms_np.tile(boxes1[:, None, :2], (1, num_box2, 1))
     broadcast2 = ms_np.tile(boxes2[None, :, :2], (num_box1, 1, 1))
 
+    # Caution:, be careful about the maximum operator. if the input is need broadcast, you'd better do it manually.
+    # otherwise loss overflow or bankrupt may occur
     lb = ops.maximum(broadcast1, broadcast2)  # left bottom [N,M,2]
     rt = ops.minimum(broadcast1, broadcast2)  # right top [N,M,2]
 
+    # this is the version that would cause loss overflow problem
     # lb = ops.maximum(boxes1[:, None, :2], boxes2[None, :, :2])  # left bottom [N,M,2]
     # rt = ops.minimum(boxes1[:, None, 2:], boxes2[None, :, 2:])  # right top [N,M,2]
 
