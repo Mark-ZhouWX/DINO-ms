@@ -179,16 +179,26 @@ class SetCriterion(nn.Cell):
             sorted_src_boxes[i] = ops.gather(src_boxes[i], src_ind[i], 0)
             sorted_tgt_boxes[i] = ops.gather(tgt_boxes[i], tgt_ind[i], 0)
 
+        losses = {}
         loss_bbox = self.l1_loss(sorted_src_boxes, sorted_tgt_boxes)
 
         loss_bbox *= tgt_valids.astype(ms.float32).reshape(bs, num_pad_box, 1)
-        losses = {"loss_bbox": loss_bbox.sum() / num_valid_box}
+        losses["loss_bbox"] = loss_bbox.sum() / num_valid_box
 
         # (bs, num_pad_box, 4) -> (bs*num_pad_box, 4) -> (bs*num_pad_box, bs*num_pad_box) -> (bs*num_pad_box,)
-        loss_giou = 1 - generalized_box_iou(box_cxcywh_to_xyxy(sorted_src_boxes.reshape(bs*num_pad_box, -1)),
-                                            box_cxcywh_to_xyxy(sorted_tgt_boxes.reshape(bs*num_pad_box, -1))).diagonal()
-
+        giou_matrix = generalized_box_iou(box_cxcywh_to_xyxy(sorted_src_boxes.reshape(bs*num_pad_box, 4)),
+                                            box_cxcywh_to_xyxy(sorted_tgt_boxes.reshape(bs*num_pad_box, 4)))
+        loss_giou = ops.sub(1, giou_matrix.diagonal())
         loss_giou *= tgt_valids.astype(ms.float32).reshape(bs*num_pad_box)
+
+        # loss_giou_list = []
+        # for i in range(bs):
+        #     a = 1 - generalized_box_iou(box_cxcywh_to_xyxy(sorted_src_boxes[i].reshape(num_pad_box, 4)),
+        #                         box_cxcywh_to_xyxy(sorted_tgt_boxes[i].reshape(num_pad_box, 4))).diagonal()
+        #     loss_giou_list.append(a)
+        # loss_giou = ops.stack(loss_giou_list)  # (bs, num_pad_box)
+        # loss_giou *= tgt_valids.astype(ms.float32)
+
         losses["loss_giou"] = loss_giou.sum() / num_valid_box
 
         return losses

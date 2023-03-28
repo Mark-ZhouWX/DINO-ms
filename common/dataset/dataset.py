@@ -237,6 +237,7 @@ def create_detr_dataset(args, mindrecord_file, batch_size=2, device_num=1,
     if is_training:
         ds = ds.map(input_columns=["image_id", "image", "annotation"],
                     output_columns=["image", "mask", "boxes", "labels", "valid"],
+                    column_order=["image", "mask", "boxes", "labels", "valid"],
                     operations=compose_map_func, python_multiprocessing=python_multiprocessing,
                     num_parallel_workers=num_parallel_workers)
         # ds.project(["image", "mask", "boxes", "labels", "valid"])
@@ -244,6 +245,7 @@ def create_detr_dataset(args, mindrecord_file, batch_size=2, device_num=1,
     else:
         ds = ds.map(input_columns=["image_id", "image", "annotation"],
                     output_columns=["image", "mask", "image_id", "ori_size"],
+                    column_order=["image", "mask", "image_id", "ori_size"],
                     operations=compose_map_func,
                     num_parallel_workers=num_parallel_workers)
         # ds.project(["image", "mask", "image_id", "ori_size"])

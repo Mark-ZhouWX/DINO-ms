@@ -5,8 +5,9 @@ batch_size: 2
 dataset_file: 'coco'
 #mindrecord_dir: C:\02Data\coco2017\MindRecord_COCO_detr
 #coco_path: C:\02Data\coco2017
-mindrecord_dir: /data1/coco2017/MindRecord_COCO_detr
-coco_path: /data1/coco2017/coco_ori/
+mindrecord_dir: /home/zhouwuxing/DINO-ms/data/MindRecord_COCO_detr
+coco_path: /home/zhouwuxing/DINO-ms/data/coco2017/
+pretrain_path: /home/zhouwuxing/DINO-ms/pretrained_model/dino_resnet50_backbone.ckpt
 train_data_type: "train2017"
 val_data_type: 'val2017'
 output_dir: './work_dirs'

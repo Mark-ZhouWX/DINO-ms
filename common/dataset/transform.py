@@ -224,6 +224,8 @@ class OutData(object):
 
             box_num = len(labels)
             gt_box = np.pad(boxes, ((0, self.pad_max_number - box_num), (0, 0)), mode="constant", constant_values=0)
+            # default_boxes = np.array([[0.5, 0.5, 0.1, 0.1]]).repeat(self.pad_max_number - box_num, axis=0).astype(np.float32)
+            # gt_box = np.concatenate([boxes, default_boxes])
             gt_label = np.pad(labels, (0, self.pad_max_number - box_num),
                               mode="constant", constant_values=self.pad_label)
             gt_valid = np.zeros((self.pad_max_number,))

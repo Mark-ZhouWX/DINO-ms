@@ -1,3 +1,7 @@
+import random
+
+import mindspore as ms
+import numpy
 from mindspore import nn, ops
 
 _grad_scale = ops.MultitypeFuncGraph("grad_scale")
@@ -6,6 +10,11 @@ _grad_scale = ops.MultitypeFuncGraph("grad_scale")
 @_grad_scale.register("Tensor", "Tensor")
 def tensor_grad_scale(scale, grad):
     return grad * ops.cast(ops.Reciprocal()(scale), ops.dtype(grad))
+
+def set_seed(seed):
+    ms.set_seed(seed)
+    numpy.random.seed(seed)
+    random.seed(seed)
 
 
 class WithLossCell(nn.Cell):
@@ -64,4 +73,6 @@ class TrainOneStepWithGradClipLossScaleCell(nn.TrainOneStepWithLossScaleCell):
 
         if not overflow:
             self.optimizer(grads)
+        else:
+            print(f'gradients overflow, skip updating loss for this step')
         return loss, cond, scaling_sens

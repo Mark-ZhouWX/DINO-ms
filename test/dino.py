@@ -151,7 +151,7 @@ def convert_input_format(batched_inputs):
     gt_classes_list = []
     gt_boxes_list = []
     gt_valids_list = []
-    num_pad_box = 5
+    num_pad_box = 100
     for targets_per_image in gt_instances:
         h, w = targets_per_image['image_size']
         image_size_xyxy = Tensor([w, h, w, h], dtype=ms.float32)
@@ -167,6 +167,8 @@ def convert_input_format(batched_inputs):
         np_gt_valid = np.zeros((num_pad_box,))
         np_gt_valid[:num_inst] = 1
         np_gt_valid = np_gt_valid.astype(np.bool_)  # (pad_max_number) False keep, True drop
+        # default_boxes = np.array([[0.5, 0.5, 0.1, 0.1]]).repeat(num_pad_box - num_inst, axis=0).astype(np.float32)
+        # np_gt_box  = np.concatenate([gt_boxes.asnumpy(), default_boxes], axis=0)
         np_gt_box = np.pad(gt_boxes.asnumpy(), ((0, num_pad_box - num_inst), (0, 0)), mode="constant", constant_values=0)
 
         gt_classes_list.append(Tensor(np_gt_label, ms.int32))
@@ -179,7 +181,7 @@ def convert_input_format(batched_inputs):
 if __name__ == "__main__":
     # set context
     ms.set_context(mode=ms.PYNATIVE_MODE, device_target='CPU' if is_windows else 'Ascend',
-                   pynative_synchronize=True, device_id=3)
+                   pynative_synchronize=True, device_id=1)
 
     train = True
     infer = False
@@ -223,13 +225,13 @@ if __name__ == "__main__":
 
 
         model = WithLossCell(network, criterion)
-        # scale_sense = nn.DynamicLossScaleUpdateCell(loss_scale_value=2 ** 12, scale_factor=2, scale_window=1000)
+        scale_sense = nn.DynamicLossScaleUpdateCell(loss_scale_value=2 ** 12, scale_factor=2, scale_window=1000)
         # scale_sense = nn.DynamicLossScaleUpdateCell(loss_scale_value=2 ** 10, scale_factor=2, scale_window=50)
         # scale_sense = nn.DynamicLossScaleUpdateCell(loss_scale_value=2 ** 8, scale_factor=2, scale_window=50)
-        scale_sense = nn.DynamicLossScaleUpdateCell(loss_scale_value=2 ** 14, scale_factor=2, scale_window=1000)
+        # scale_sense = nn.DynamicLossScaleUpdateCell(loss_scale_value=2 ** 14, scale_factor=2, scale_window=1000)
         # scale_sense = Tensor(1.0)
         model = TrainOneStepWithGradClipLossScaleCell(model, optimizer, scale_sense, grad_clip=False, clip_value=0.1)
-        for k in range(10):
+        for k in range(5000):
             loss, cond, scaling_sens = model(*inputs)
             print(f'loss of the {k} step', loss, f'cond {cond}')
 
@@ -241,7 +243,7 @@ if __name__ == "__main__":
         grad_fn = ops.GradOperation(get_by_list=True)(model, ParameterTuple(weight))
 
         show_grad_weight = True
-        for k in range(10):
+        for k in range(50):
             loss = model(*inputs)
             gradients = grad_fn(*inputs)
             print(f'loss of the {k} step', loss)

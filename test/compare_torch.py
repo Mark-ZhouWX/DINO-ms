@@ -5,12 +5,7 @@ import re
 import cv2
 import mindspore
 import numpy as np
-import torch
-import platform
-
-from test import is_windows
-from test.dino import dino, inputs
-
+# import torch
 
 # 通过PyTorch参数文件，打印PyTorch的参数文件里所有参数的参数名和shape，返回参数字典
 def pytorch_params(pth_file, verbose=False):
@@ -234,7 +229,21 @@ def che_res(in_pth_path, in_ms_pth_path):
     cv2.waitKey()
 
 
+def get_dino_backbone_resnet(in_path, out_path):
+    param_dict = mindspore.load_checkpoint(in_path)
+    param_list = []
+    for k, v in param_dict.items():
+        print(k, v)
+        if k.startswith('classifier'):
+            continue
+        param_list.append(dict(name='backbone', data=v))
+    mindspore.save_checkpoint(param_list, os.path.join(out_path))
+
+
 if __name__ == "__main__":
+    get_dino_backbone_resnet(in_path='/home/zhouwuxing/input/pretrained_model/resnet50_224.ckpt',
+                             out_path='/home/zhouwuxing/input/pretrained_model/dino_resnet50_backbone.ckpt')
+    exit()
 
     pth_dir = r"C:\02Data\models" if is_windows else '/data1/zhouwuxing/pretrained_model/'
     pth_path = os.path.join(pth_dir, "dino_r50_4scale_12ep_49_2AP.pth")

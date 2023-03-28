@@ -158,7 +158,7 @@ class DINO(nn.Cell):
                 - dict["aux_outputs"]: Optional, only returned when auxilary losses are activated. It is a list of
                             dictionnaries containing the two above keys for each decoder layer.
         """
-        if not self.unit_test:
+        if True and not self.unit_test:
             batch_size, _, h, w = images.shape
             # extract features with backbone
             features = self.backbone(images)

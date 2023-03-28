@@ -24,6 +24,7 @@ from typing import Tuple
 
 import mindspore as ms
 from mindspore import Tensor, ops
+import mindspore.numpy as ms_np
 # import torch
 # from torchvision.ops.boxes import box_area
 
@@ -39,8 +40,12 @@ def box_cxcywh_to_xyxy(bbox) -> Tensor:
     """
     cx, cy, w, h = ops.unstack(bbox, axis=-1)
     new_bbox = [(cx - 0.5 * w), (cy - 0.5 * h), (cx + 0.5 * w), (cy + 0.5 * h)]
-    # aa = ops.stack(new_bbox, axis=0).transpose(1, 0)
     aa = ops.stack(new_bbox, axis=-1)
+    # factor = Tensor([[   1,    0,    1,    0],
+    #                  [   0,    1,    0,    1],
+    #                  [-0.5,    0,  0.5,    0],
+    #                  [   0, -0.5,    0,  0.5]], bbox.dtype)
+    # aa = ops.matmul(bbox, factor)
     return aa
     # return ops.stack(new_bbox, axis=-1)
 
@@ -122,19 +127,27 @@ def box_intersection(boxes1, boxes2) -> Tensor:
         for every element in boxes1 and boxes2.
     """
     assert (boxes1[:, 2:] >= boxes1[:, :2]).all()
-    assert (boxes2[:, 2:] >= boxes2[:, :2]).reshape(boxes2.shape[0], 2).all()
-    # assert (boxes2[:, 2:] >= boxes2[:, :2]).all()
+    assert (boxes2[:, 2:] >= boxes2[:, :2]).all()
 
-    lb = ops.maximum(boxes1[:, None, :2], boxes2[:, :2])  # left bottom [N,M,2]
-    rt = ops.minimum(boxes1[:, None, 2:], boxes2[:, 2:])  # right top [N,M,2]
+    num_box1 = len(boxes1)
+    num_box2 = len(boxes2)
+    broadcast1 = ms_np.tile(boxes1[:, None, :2], (1, num_box2, 1))
+    broadcast2 = ms_np.tile(boxes2[None, :, :2], (num_box1, 1, 1))
 
-    wh = ops.clip_by_value((rt - lb), clip_value_min=Tensor(0.0))  # [N,M,2]
+    lb = ops.maximum(broadcast1, broadcast2)  # left bottom [N,M,2]
+    rt = ops.minimum(broadcast1, broadcast2)  # right top [N,M,2]
+
+    # lb = ops.maximum(boxes1[:, None, :2], boxes2[None, :, :2])  # left bottom [N,M,2]
+    # rt = ops.minimum(boxes1[:, None, 2:], boxes2[None, :, 2:])  # right top [N,M,2]
+
+    wh = ops.clip_by_value(rt - lb, clip_value_min=Tensor(0.0, boxes1.dtype),
+                           clip_value_max=Tensor(100.0, boxes1.dtype))  # [N,M,2]
     inter = wh[:, :, 0] * wh[:, :, 1]  # [N,M]
 
     return inter
 
 
-def box_iou(boxes1, boxes2) -> Tuple:
+def box_iou(boxes1, boxes2, eps=1e-6) -> Tuple:
     """Modified from ``torchvision.ops.box_iou``
 
     Return both intersection-over-union (Jaccard index) and union between
@@ -154,13 +167,43 @@ def box_iou(boxes1, boxes2) -> Tuple:
 
     inter = box_intersection(boxes1, boxes2)
 
-    union = area1[:, None] + area2[None, :] - inter
+    num_box1 = len(area1)
+    num_box2 = len(area2)
+    bc_area1 = ms_np.tile(area1[:, None], (1, num_box2)) # (N, M)
+    bs_area2 = ms_np.tile(area2[None, :], (num_box1, 1)) # (N, M)
 
-    iou = inter / (union + 1e-6)
+    union = bc_area1 + bs_area2 - inter
+
+    iou = inter / (union + eps)
     return iou, union
 
 
-def generalized_box_iou(boxes1, boxes2) -> Tensor:
+def box_mer_area(boxes1, boxes2) -> Tensor:
+    """
+
+    Return both maximum-exterior-rectangle area (Jaccard index) between two sets of boxes.
+
+    Args:
+        boxes1: (Tensor[N, 4]): first set of boxes, in x1,y1,x2,y2 format
+        boxes2: (Tensor[M, 4]): second set of boxes, in x1,y1,x2,y2 format
+
+    Returns:
+        Tensor: A tuple of NxM matrix, with shape [N, M], containing the pairwise MER area values
+        for every element in boxes1 and boxes2.
+    """
+    num_box1 = len(boxes1)
+    num_box2 = len(boxes2)
+    broadcast1 = ms_np.tile(boxes1[:, None, :2], (1, num_box2, 1))
+    broadcast2 = ms_np.tile(boxes2[None, :, :2], (num_box1, 1, 1))
+
+    lt = ops.minimum(broadcast1, broadcast2)
+    rb = ops.maximum(broadcast1, broadcast2)
+    wh = ops.clip_by_value((rb - lt), clip_value_min=Tensor(0.0))  # [N,M,2]
+    area = wh[:, :, 0] * wh[:, :, 1]
+    return area
+
+
+def generalized_box_iou(boxes1, boxes2, eps=1e-6) -> Tensor:
     """
     Generalized IoU from https://giou.stanford.edu/
 
@@ -178,46 +221,11 @@ def generalized_box_iou(boxes1, boxes2) -> Tensor:
     # so do an early check
 
     assert (boxes1[:, 2:] >= boxes1[:, :2]).all()
-    # assert (boxes2[:, 2:] >= boxes2[:, :2]).reshape(boxes2.shape[0], 2).all()
     assert (boxes2[:, 2:] >= boxes2[:, :2]).all()
-    iou, union = box_iou(boxes1, boxes2)
+
+    iou, union = box_iou(boxes1, boxes2, eps)
 
     # area of box minimum exterior rectangle (MER)
-    lt = ops.minimum(boxes1[:, None, :2], boxes2[:, :2])
-    rb = ops.maximum(boxes1[:, None, 2:], boxes2[:, 2:])
-    wh = ops.clip_by_value((rb - lt), clip_value_min=Tensor(0.0))  # [N,M,2]
-    area = wh[:, :, 0] * wh[:, :, 1]
-
-    return iou - (area - union) / (area + 1e-6)
-
-
-def masks_to_boxes(masks) -> Tensor:
-    """Compute the bounding boxes around the provided masks
-
-    The masks should be in format [N, H, W] where N is
-    the number of masks, (H, W) are the spatial dimensions.
-
-    Args:
-        masks (Tensor[N, H, W]):
-    Returns:
-        torch.Tensor: a [N, 4] tensor with
-        the boxes in (x0, y0, x1, y1) format.
-    """
-    if masks.numel() == 0:
-        return ops.zeros((0, 4), masks.dtype)
-
-    h, w = masks.shape[-2:]
-
-    y = ops.arange(0, h, dtype=ms.float32)
-    x = ops.arange(0, w, dtype=ms.float32)
-    y, x = ops.meshgrid(y, x)
-
-    x_mask = masks * x.unsqueeze(0)
-    x_max = x_mask.flatten(1).max(-1)[0]
-    x_min = x_mask.masked_fill(~(masks.bool()), 1e8).flatten(1).min(-1)[0]
-
-    y_mask = masks * y.unsqueeze(0)
-    y_max = y_mask.flatten(1).max(-1)[0]
-    y_min = y_mask.masked_fill(~(masks.bool()), 1e8).flatten(1).min(-1)[0]
-
-    return ops.stack([x_min, y_min, x_max, y_max], 1)
+    area = box_mer_area(boxes1, boxes2)
+    corner = ops.clip_by_value(area - union, clip_value_min=Tensor(0.0))
+    return iou - corner / (area + eps)

@@ -12,7 +12,8 @@ from model_zoo.dino.dn_criterion import DINOCriterion
 def build_dino(unit_test=False):
     num_classes = 80
     num_queries = 900
-    dn_number = 0 if unit_test else 100
+    # dn_number = 0 if unit_test else 100
+    dn_number = 0
     # build model
     backbone = resnet50(
         in_channels=3,
