@@ -180,8 +180,7 @@ def convert_input_format(batched_inputs):
 
 if __name__ == "__main__":
     # set context
-    ms.set_context(mode=ms.PYNATIVE_MODE, device_target='CPU' if is_windows else 'Ascend',
-                   pynative_synchronize=True, device_id=1)
+    ms.set_context(mode=ms.PYNATIVE_MODE, device_target='Ascend', device_id=6, pynative_synchronize=True)
 
     train = True
     infer = False

@@ -1,6 +1,7 @@
 import copy
 from typing import Dict, List
 
+import mindspore as ms
 from mindspore import nn
 
 from common.layers.conv import ConvNormAct
@@ -31,37 +32,6 @@ class ChannelMapper(nn.Cell):
         activation (nn.Module, optional): The activation layer used for each scale. Default: None.
         num_outs (int, optional): Number of output feature maps. There will be ``extra_convs`` when
             ``num_outs`` is larger than the length of ``in_features``. Default: None.
-
-    Examples:
-        >>> import torch
-        >>> import torch.nn as nn
-        >>> from detrex.modeling import ChannelMapper
-        >>> from detectron2.modeling import ShapeSpec
-        >>> input_features = {
-        ... "p0": torch.randn(1, 128, 128, 128),
-        ... "p1": torch.randn(1, 256, 64, 64),
-        ... "p2": torch.randn(1, 512, 32, 32),
-        ... "p3": torch.randn(1, 1024, 16, 16),
-        ... }
-        >>> input_shapes = {
-        ... "p0": ShapeSpec(channels=128),
-        ... "p1": ShapeSpec(channels=256),
-        ... "p2": ShapeSpec(channels=512),
-        ... "p3": ShapeSpec(channels=1024),
-        ... }
-        >>> in_features = ["p0", "p1", "p2", "p3"]
-        >>> neck = ChannelMapper(
-        ... input_shapes=input_shapes,
-        ... in_features=in_features,
-        ... out_channels=256,
-        ... norm_layer=nn.GroupNorm(num_groups=32, num_channels=256)
-        >>> outputs = neck(input_features)
-        >>> for i in range(len(outputs)):
-        ... print(f"output[{i}].shape = {outputs[i].shape}")
-        output[0].shape = torch.Size([1, 256, 128, 128])
-        output[1].shape = torch.Size([1, 256, 64, 64])
-        output[2].shape = torch.Size([1, 256, 32, 32])
-        output[3].shape = torch.Size([1, 256, 16, 16])
     """
 
     def __init__(
@@ -131,21 +101,22 @@ class ChannelMapper(nn.Cell):
         self.in_features = in_features
         self.out_channels = out_channels
 
+    @ms.ms_function
     def construct(self, inputs):
         """Forward function for ChannelMapper
 
         Args:
-            inputs (Dict[str, torch.Tensor]): The backbone feature maps.
+            inputs (Tuple[torch.Tensor]): The backbone feature maps.
 
         Return:
             tuple(torch.Tensor): A tuple of the processed features.
         """
         assert len(inputs) == len(self.convs)
-        outs = [self.convs[i](inputs[self.in_features[i]]) for i in range(len(inputs))]
+        outs = [self.convs[i](inputs[i]) for i in range(len(inputs))]
         if self.extra_convs:
             for i in range(len(self.extra_convs)):
                 if i == 0:
-                    outs.append(self.extra_convs[0](inputs[self.in_features[-1]]))
+                    outs.append(self.extra_convs[0](inputs[-1]))
                 else:
                     outs.append(self.extra_convs[i](outs[-1]))
         return tuple(outs)

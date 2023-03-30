@@ -141,6 +141,7 @@ class DINO(nn.Cell):
 
         self.unit_test = unit_test
 
+    # @ms.ms_function
     def construct(self, images, img_masks, targets=None):
         """Forward function of `DINO` which excepts a list of dict as inputs.
 
@@ -158,7 +159,7 @@ class DINO(nn.Cell):
                 - dict["aux_outputs"]: Optional, only returned when auxilary losses are activated. It is a list of
                             dictionnaries containing the two above keys for each decoder layer.
         """
-        if True and not self.unit_test:
+        if True or not self.unit_test:
             batch_size, _, h, w = images.shape
             # extract features with backbone
             features = self.backbone(images)

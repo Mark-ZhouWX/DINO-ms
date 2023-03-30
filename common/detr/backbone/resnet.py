@@ -5,9 +5,10 @@ Refer to Deep Residual Learning for Image Recognition.
 import logging
 import os
 from functools import partial
-from typing import Optional, Type, List, Union, Dict
+from typing import Optional, Type, List, Union, Dict, Tuple
 import download
 
+import mindspore as ms
 from mindspore import nn, Tensor, load_checkpoint, load_param_into_net
 
 
@@ -273,7 +274,7 @@ class ResNet(nn.Cell):
 
         return nn.SequentialCell(layers)
 
-    def forward_features(self, x: Tensor) -> Dict[str, Tensor]:
+    def forward_features(self, x: Tensor) -> Tuple:
         """Network forward feature extraction."""
         x = self.conv1(x)
         x = self.bn1(x)
@@ -289,14 +290,15 @@ class ResNet(nn.Cell):
 
         out5 = self.layer4(out4)
 
-        out_layers = dict()
+        out_layers = ()
         for lay_name, out_feat in zip(self.all_layer_names, [out1, out2, out3, out4, out5]):
             if lay_name in self.out_layer_names:
-                out_layers.update({lay_name: out_feat})
+                out_layers += (out_feat,)
 
         return out_layers
 
-    def construct(self, x: Tensor) -> Dict[str, Tensor]:
+    @ms.ms_function
+    def construct(self, x: Tensor) -> Tuple:
         x = self.forward_features(x)
         return x
 
