@@ -1,13 +1,14 @@
 import math
 import warnings
-from typing import Optional
+from typing import Optional, List
 
 import mindspore as ms
 from mindspore import nn, ops, Tensor
 import mindspore.common.initializer as init
 import mindspore.numpy as ms_np
 
-from common.utils.walk_around import split
+from common.layers.multi_scale import get_prod_shape
+from common.utils.work_around import split
 
 def _is_power_of_2(n):
     if (not isinstance(n, int)) or (n < 0):
@@ -110,18 +111,16 @@ class MultiScaleDeformableAttention(nn.Cell):
         pshape, dtype = self.output_proj.bias.shape, self.output_proj.bias.dtype
         self.output_proj.bias.set_data(init.initializer('zeros', pshape, dtype))
 
+    @ms.ms_function
     def construct(
         self,
         query: Tensor,
-        key: Optional[Tensor] = None,  # not used in deformable-attn, for good layout
         value: Optional[Tensor] = None,
         identity: Optional[Tensor] = None,
         query_pos: Optional[Tensor] = None,
         key_padding_mask: Optional[Tensor] = None,
         reference_points: Optional[Tensor] = None,
-        spatial_shapes: Optional[Tensor] = None,
-        level_start_index: Optional[Tensor] = None,
-        **kwargs
+        spatial_shapes: Optional[List] = None,
     ) -> Tensor:
 
         """
@@ -146,11 +145,8 @@ class MultiScaleDeformableAttention(nn.Cell):
                 bottom-right (1, 1), including padding are.
                 or `(N, Length_{query}, num_levels, 4)`, add additional
                 two dimensions `(h, w)` to form reference boxes.
-            spatial_shapes (torch.Tensor): Spatial shape of features in different levels.
+            spatial_shapes (List[List]): Spatial shape of features in different levels.
                 With shape `(num_levels, 2)`, last dimension represents `(h, w)`.
-            level_start_index (torch.Tensor): The start index of each level. A tensor with
-                shape `(num_levels, )` which can be represented as
-                `[0, h_0 * w_0, h_0 * w_0 + h_1 * w_1, ...]`.
 
         Returns:
             torch.Tensor: forward results with shape `(num_query, bs, embed_dim)`
@@ -167,8 +163,10 @@ class MultiScaleDeformableAttention(nn.Cell):
         bs, num_query, _ = query.shape
         bs, num_value, _ = value.shape
 
-        assert int((spatial_shapes.asnumpy()[:, 0] * spatial_shapes.asnumpy()[:, 1]).sum()) == num_value
-        # assert (spatial_shapes[:, 0] * spatial_shapes[:, 1]).sum() == num_value
+        # assert int((spatial_shapes[:, 0] * spatial_shapes[:, 1]).sum()) == num_value
+        assert sum(get_prod_shape(spatial_shapes)) == num_value
+
+        # assert ops.equal(ops.prod(spatial_shapes.astype(ms.float32), axis=1).sum(), num_value)
 
         value = self.value_proj(value)
         if key_padding_mask is not None:
@@ -186,7 +184,9 @@ class MultiScaleDeformableAttention(nn.Cell):
         attention_weights = attention_weights.view(bs, num_query, self.num_heads, self.num_levels, self.num_points)
 
         if reference_points.shape[-1] == 2:
-            offset_normalizer = ops.stack([spatial_shapes[..., 1], spatial_shapes[..., 0]], -1)  # (num_level, 2), 2: wh
+            spatial_shapes_tensor = Tensor(spatial_shapes, ms.int32)
+            # (num_level, 2), 2: wh
+            offset_normalizer = ops.stack([spatial_shapes_tensor[..., 1], spatial_shapes_tensor[..., 0]], -1)
             sampling_locations = (
                 reference_points[:, :, None, :, None, :]
                 + sampling_offsets / offset_normalizer[None, None, None, :, None, :]
@@ -201,50 +201,40 @@ class MultiScaleDeformableAttention(nn.Cell):
             raise ValueError(
                 "Last dim of reference_points must be 2 or 4, but get {} instead.".format(reference_points.shape[-1])
             )
-        if False and ms.get_context('device_target') in {'GPU', 'Ascend'}:
-            # TODO apply cuda version deform-attn
-            output = MultiScaleDeformableAttnFunction.apply(
-                value,
-                spatial_shapes,
-                level_start_index,
-                sampling_locations,
-                attention_weights,
-                self.im2col_step,
-            )
-        else:
-            output = multi_scale_deformable_attn_pytorch(
-                value, spatial_shapes, sampling_locations, attention_weights
-            )
+
+        output = multi_scale_deformable_attn(value, spatial_shapes, sampling_locations, attention_weights)
 
         output = self.output_proj(output)
 
         return self.dropout(output) + identity
 
 
-def multi_scale_deformable_attn_pytorch(
-    value: Tensor,  # (bs, sum(hw), num_head, head_embed_dims)  head_embed_dims=embed_dim//num_head
-    value_spatial_shapes: Tensor,  # (num_level, 2)
-    sampling_locations: Tensor,  # (bs, num_query, num_head, num_level, num_points, 2), normalized
-    attention_weights: Tensor,
-) -> Tensor:
+def multi_scale_deformable_attn(
+        value: Tensor,  # (bs, sum(hw), num_head, head_embed_dims)  head_embed_dims=embed_dim//num_head
+        value_spatial_shapes: List,  # (num_level, 2)
+        sampling_locations: Tensor,  # (bs, num_query, num_head, num_level, num_points, 2), normalized
+        attention_weights: Tensor,
+    ) -> Tensor:
 
     bs, _, num_heads, head_embed_dims = value.shape  # embed_dim is the one for head
     _, num_queries, num_heads, num_levels, num_points, _ = sampling_locations.shape
     # indices_or_sections = ops.cumsum(value_spatial_shapes[:, 0] * value_spatial_shapes[:, 1], axis=0)[:-1]
-    split_sections = (value_spatial_shapes[:, 0] * value_spatial_shapes[:, 1]).astype(ms.int32).asnumpy().tolist()
+    split_sections = get_prod_shape(value_spatial_shapes)
+    # split_sections = ops.prod(value_spatial_shapes.astype(ms.float32), axis=1).astype(ms.int32)
     # value_list = ops.split(value, split_sections, axis=1)
     value_list = split(value, split_sections, axis=1)
     sampling_grids = 2 * sampling_locations - 1
     sampling_value_list = []
-    value_spatial_shapes_list = value_spatial_shapes.asnumpy().tolist()
+    # value_spatial_shapes_list = value_spatial_shapes.astype(ms.float32).asnumpy().tolist()
+    value_spatial_shapes_list = value_spatial_shapes
     for level, (H_, W_) in enumerate(value_spatial_shapes_list):
-        H_, W_ = int(H_), int(W_)
+        # H_, W_ = int(H_), int(W_)
         # bs, H_*W_, num_heads, head_embed_dims ->
         # bs, H_*W_, num_heads*head_embed_dims ->
         # bs, num_heads*head_embed_dims, H_*W_ ->
         # bs*num_heads, head_embed_dims, H_, W_
         value_l_ = (
-            value_list[level].reshape(bs, int(H_ * W_), -1).transpose((0, 2, 1)).reshape(bs * num_heads, head_embed_dims, H_, W_)
+            value_list[level].reshape(bs, H_ * W_, -1).transpose((0, 2, 1)).reshape(bs * num_heads, head_embed_dims, H_, W_)
         )
         # bs, num_queries, num_heads, num_points, 2 ->
         # bs, num_heads, num_queries, num_points, 2 ->

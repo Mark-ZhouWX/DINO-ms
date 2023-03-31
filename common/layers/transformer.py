@@ -1,8 +1,12 @@
 import copy
 import warnings
-from typing import List
+from typing import List, Tuple
 
+import mindspore as ms
 from mindspore import nn, Tensor
+
+from common.layers.attention import MultiheadAttention
+from common.layers.attention_deformable import MultiScaleDeformableAttention
 
 
 class BaseTransformerLayer(nn.Cell):
@@ -34,6 +38,7 @@ class BaseTransformerLayer(nn.Cell):
         ffn: nn.Cell,
         norm: nn.Cell,
         operation_order: tuple = None,
+        attn_type: tuple = None,
     ):
         super(BaseTransformerLayer, self).__init__()
         assert set(operation_order).issubset({"self_attn", "norm", "cross_attn", "ffn"})
@@ -41,14 +46,12 @@ class BaseTransformerLayer(nn.Cell):
         # count attention nums
         num_attn = operation_order.count("self_attn") + operation_order.count("cross_attn")
 
-        if isinstance(attn, nn.Cell):
-            attn = [copy.deepcopy(attn) for _ in range(num_attn)]
-        else:
-            assert len(attn) == num_attn, (
-                f"The length of attn (nn.Module or List[nn.Module]) {num_attn}"
-                f"is not consistent with the number of attention in "
-                f"operation_order {operation_order}"
-            )
+        assert len(attn) == num_attn, (
+            f"The length of attn (nn.Module or List[nn.Module]) {num_attn}"
+            f"is not consistent with the number of attention in "
+            f"operation_order {operation_order}"
+        )
+        assert len(attn_type) == num_attn
 
         self.num_attn = num_attn
         self.operation_order = operation_order
@@ -59,21 +62,28 @@ class BaseTransformerLayer(nn.Cell):
             if operation_name in ["self_attn", "cross_attn"]:
                 self.attentions.append(attn[index])
                 index += 1
-
+        self.attn_type = attn_type
         self.embed_dim = self.attentions[0].embed_dim
 
         # count ffn nums
-        self.ffns = nn.CellList()
-        num_ffns = operation_order.count("ffn")
-        for _ in range(num_ffns):
-            self.ffns.append(copy.deepcopy(ffn))
+        if not isinstance(ffn, nn.CellList):
+            self.ffns = nn.CellList()
+            num_ffns = operation_order.count("ffn")
+            for _ in range(num_ffns):
+                self.ffns.append(copy.deepcopy(ffn))
+        else:
+            self.ffns = ffn
 
         # count norm nums
-        self.norms = nn.CellList()
-        num_norms = operation_order.count("norm")
-        for _ in range(num_norms):
-            self.norms.append(copy.deepcopy(norm))
+        if not isinstance(norm, nn.CellList):
+            self.norms = nn.CellList()
+            num_norms = operation_order.count("norm")
+            for _ in range(num_norms):
+                self.norms.append(copy.deepcopy(norm))
+        else:
+            self.norms = norm
 
+    @ms.ms_function
     def construct(
         self,
         query: Tensor,
@@ -84,32 +94,35 @@ class BaseTransformerLayer(nn.Cell):
         attn_masks: List[Tensor] = None,
         query_key_padding_mask: Tensor = None,
         key_padding_mask: Tensor = None,
-        **kwargs,
+        reference_points: Tensor = None,
+        spatial_shapes: Tuple = None,
     ):
         """Forward function for `BaseTransformerLayer`.
 
         **kwargs contains the specific arguments of attentions.
 
         Args:
-            query (torch.Tensor): Query embeddings with shape
+            query (Tensor): Query embeddings with shape
                 `(num_query, bs, embed_dim)` or `(bs, num_query, embed_dim)`
                 which should be specified follows the attention module used in
                 `BaseTransformerLayer`.
-            key (torch.Tensor): Key embeddings used in `Attention`.
+            key (Tensor): Key embeddings used in `Attention`.
             value (torch.Tensor): Value embeddings with the same shape as `key`.
-            query_pos (torch.Tensor): The position embedding for `query`.
+            query_pos (Tensor): The position embedding for `query`.
                 Default: None.
-            key_pos (torch.Tensor): The position embedding for `key`.
+            key_pos (Tensor): The position embedding for `key`.
                 Default: None.
             attn_masks (List[Tensor] | None): A list of 2D ByteTensor used
                 in calculation the corresponding attention. The length of
                 `attn_masks` should be equal to the number of `attention` in
                 `operation_order`. Default: None.
-            query_key_padding_mask (torch.Tensor): ByteTensor for `query`, with
+            query_key_padding_mask (Tensor): ByteTensor for `query`, with
                 shape `(bs, num_query)`. Only used in `self_attn` layer.
                 Defaults to None.
-            key_padding_mask (torch.Tensor): ByteTensor for `key`, with
+            key_padding_mask (Tensor): ByteTensor for `key`, with
                 shape `(bs, num_key)`. Default: None.
+            multi_scale_args (Tuple[Tensor]): tuple that contains two args of multi-scale attention,
+             namely, reference_points, spatial_shapes, level_start_index
         """
         norm_index = 0
         attn_index = 0
@@ -117,9 +130,6 @@ class BaseTransformerLayer(nn.Cell):
         identity = query
         if attn_masks is None:
             attn_masks = [None for _ in range(self.num_attn)]
-        elif isinstance(attn_masks, Tensor):
-            attn_masks = [copy.deepcopy(attn_masks) for _ in range(self.num_attn)]
-            warnings.warn(f"Use same attn_mask in all attentions in " f"{self.__class__.__name__} ")
         else:
             assert len(attn_masks) == self.num_attn, (
                 f"The length of "
@@ -131,17 +141,30 @@ class BaseTransformerLayer(nn.Cell):
         for layer in self.operation_order:
             if layer == "self_attn":
                 temp_key = temp_value = query
-                query = self.attentions[attn_index](
-                    query,
-                    temp_key,
-                    temp_value,
-                    identity if self.pre_norm else None,
-                    query_pos=query_pos,
-                    key_pos=query_pos,
-                    attn_mask=attn_masks[attn_index],  # None in encoder, active in decoder
-                    key_padding_mask=query_key_padding_mask,  # None in decoder, active in encoder
-                    **kwargs,
-                )
+                if self.attn_type[attn_index] == 'MultiheadAttention':
+                    query = self.attentions[attn_index](
+                        query,
+                        temp_key,
+                        temp_value,
+                        identity if self.pre_norm else None,
+                        query_pos=query_pos,
+                        key_pos=query_pos,
+                        attn_mask=attn_masks[attn_index],  # None in encoder, active in decoder
+                        key_padding_mask=query_key_padding_mask,  # None in decoder, active in encoder
+                    )
+                elif self.attn_type[attn_index] == 'MultiScaleDeformableAttention':
+                    query = self.attentions[attn_index](
+                        query,
+                        temp_value,
+                        identity if self.pre_norm else None,
+                        query_pos=query_pos,
+                        key_padding_mask=query_key_padding_mask,  # None in decoder, active in encoder
+                        reference_points=reference_points,
+                        spatial_shapes=spatial_shapes,
+                    )
+                else:
+                    raise NotImplementedError(f'not supported self-attetion type [{type(self.attentions[attn_index])}]')
+
                 attn_index += 1
                 identity = query
 
@@ -150,17 +173,30 @@ class BaseTransformerLayer(nn.Cell):
                 norm_index += 1
 
             elif layer == "cross_attn":
-                query = self.attentions[attn_index](
-                    query,
-                    key,
-                    value,
-                    identity if self.pre_norm else None,
-                    query_pos=query_pos,
-                    key_pos=key_pos,
-                    attn_mask=attn_masks[attn_index],
-                    key_padding_mask=key_padding_mask,
-                    **kwargs,
-                )
+                if self.attn_type[attn_index] == 'MultiheadAttention':
+                    query = self.attentions[attn_index](
+                        query,
+                        key,
+                        value,
+                        identity if self.pre_norm else None,
+                        query_pos=query_pos,
+                        key_pos=key_pos,
+                        attn_mask=attn_masks[attn_index],
+                        key_padding_mask=key_padding_mask,
+                    )
+                elif self.attn_type[attn_index] == 'MultiScaleDeformableAttention':
+                    query = self.attentions[attn_index](
+                        query,
+                        value,
+                        identity if self.pre_norm else None,
+                        query_pos=query_pos,
+                        key_padding_mask=key_padding_mask,
+                        reference_points=reference_points,
+                        spatial_shapes=spatial_shapes,
+                    )
+                else:
+                    raise NotImplementedError(f'not supported cross-attetion type [{type(self.attentions[attn_index])}]')
+
                 attn_index += 1
                 identity = query
 
@@ -169,40 +205,3 @@ class BaseTransformerLayer(nn.Cell):
                 ffn_index += 1
 
         return query
-
-
-class TransformerLayerSequence(nn.Cell):
-    """Base class for TransformerEncoder and TransformerDecoder, which will copy
-    the passed `transformer_layers` module `num_layers` time or save the passed
-    list of `transformer_layers` as parameters named ``self.layers``
-    which is the type of ``nn.ModuleList``.
-    The users should inherit `TransformerLayerSequence` and implement their
-    own forward function.
-
-    Args:
-        transformer_layers (list[BaseTransformerLayer] | BaseTransformerLayer): A list
-            of BaseTransformerLayer. If it is obj:`BaseTransformerLayer`, it
-            would be repeated `num_layers` times to a list[BaseTransformerLayer]
-        num_layers (int): The number of `TransformerLayer`. Default: None.
-    """
-
-    def __init__(
-        self,
-        transformer_layers=None,
-        num_layers=None,
-    ):
-        super(TransformerLayerSequence, self).__init__()
-        self.num_layers = num_layers
-        self.layers = nn.CellList()
-        if isinstance(transformer_layers, nn.Cell):
-            for _ in range(num_layers):
-                self.layers.append(copy.deepcopy(transformer_layers))
-        else:
-            assert isinstance(transformer_layers, list) and len(transformer_layers) == num_layers
-
-    def construct(self, *args, **kwargs):
-        """
-        Forward function of `TransformerLayerSequence`. The users should inherit
-        `TransformerLayerSequence` and implemente their own forward function.
-        """
-        raise NotImplementedError()

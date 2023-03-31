@@ -5,7 +5,7 @@ from mindspore import nn, ops, Tensor
 from scipy.optimize import linear_sum_assignment
 
 from common.utils.box_ops import generalized_box_iou, box_cxcywh_to_xyxy
-from common.utils.walk_around import cdist, split
+from common.utils.work_around import cdist, split
 
 
 class HungarianMatcher(nn.Cell):

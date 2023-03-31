@@ -2,8 +2,8 @@ import math
 
 import mindspore as ms
 from mindspore import nn, Tensor, ops
-
-from common.utils.walk_around import split
+from mindspore import numpy as ms_np
+from common.utils.work_around import split
 
 
 class PositionEmbeddingSine(nn.Cell):
@@ -87,7 +87,7 @@ class PositionEmbeddingSine(nn.Cell):
         pos = ops.concat((pos_y, pos_x), axis=3).transpose(0, 3, 1, 2)
         return pos
 
-
+@ms.ms_function
 def get_sine_pos_embed(pos_tensor: Tensor, num_pos_feats: int = 128, temperature: int = 10000, exchange_xy: bool = True,
                        ) -> Tensor:
     """generate sine position embedding from a position tensor
@@ -106,7 +106,7 @@ def get_sine_pos_embed(pos_tensor: Tensor, num_pos_feats: int = 128, temperature
         with shape `(None, n * num_pos_feats)`.
     """
     scale = 2 * math.pi
-    dim_t = ops.arange(num_pos_feats).astype(ms.float32)
+    dim_t = ms_np.arange(num_pos_feats).astype(ms.float32)
     dim_t = temperature ** (2 * ops.floor_div(dim_t, 2) / num_pos_feats)
 
     def sine_func(x: Tensor):

@@ -7,7 +7,7 @@ from common.layers.attention import MultiheadAttention
 from common.layers.attention_deformable import MultiScaleDeformableAttention
 from common.layers.mlp import FFN, MLP
 from common.layers.position_embedding import get_sine_pos_embed
-from common.layers.transformer import TransformerLayerSequence, BaseTransformerLayer
+from common.layers.transformer import BaseTransformerLayer
 from common.utils.misc import inverse_sigmoid
 
 
@@ -57,6 +57,7 @@ class DINOTransformer(nn.Cell):
 
         self.init_weights()
 
+    # @ms.ms_function
     def construct(
             self,
             multi_level_feats,
@@ -64,7 +65,6 @@ class DINOTransformer(nn.Cell):
             multi_level_pos_embeds,
             query_embed,
             attn_masks,
-            **kwargs,
     ):
         """
         Args:
@@ -96,29 +96,27 @@ class DINOTransformer(nn.Cell):
         feat_flatten = ops.concat(feat_flatten, 1)
         mask_flatten = ops.concat(mask_flatten, 1)
         lvl_pos_embed_flatten = ops.concat(lvl_pos_embed_flatten, 1)
-        spatial_shapes = Tensor(spatial_shapes, dtype=ms.int32)
-        level_start_index = ops.concat((ops.zeros((1,), spatial_shapes.dtype),
-                                        (spatial_shapes[:, 0] * spatial_shapes[:, 1]).cumsum(0)[:-1]))
         # there may be slight difference of ratio values between different level due to of mask quantization
         valid_ratios = ops.stack([self.get_valid_ratio(m) for m in multi_level_masks], 1)  # (bs, num_level, 2)
 
         # reference_points for deformable-attn, range (H, W), un-normalized, flattened
         reference_points = self.get_reference_points(spatial_shapes, valid_ratios)  # (bs sum(hw), nl, 2)
 
+        #  spatial_shapes (bs, sum(hw), num_level, 2)
         # (bs, sum(hw), c)
         memory = self.encoder(
-            query=feat_flatten,
-            key=None,
-            value=None,
-            query_pos=lvl_pos_embed_flatten,
+            feat_flatten, # query
+            None,  # key
+            None,  # value
+            lvl_pos_embed_flatten,   # query_pos
+            None,  # key_pos
+            None,  # attn_masks
             # to mask image input padding area·
-            query_key_padding_mask=mask_flatten,
+            mask_flatten,  # query_key_padding_mask
+            None,  # key_padding_mask
             # leave for deformable-attn
-            spatial_shapes=spatial_shapes,
-            reference_points=reference_points,  # (bs, sum(hw), num_level, 2)
-            level_start_index=level_start_index,
-            valid_ratios=valid_ratios,
-            **kwargs,
+            reference_points,
+            spatial_shapes,  # multi_scale_args
         )
 
         # (bs, sum(hw), c); (bs, sum(hw), 4) unsigmoided + valid
@@ -169,20 +167,22 @@ class DINOTransformer(nn.Cell):
 
         # decoder
         # (num_trans_layer, bs, num_query, embed_dim),   (num_trans_layer, bs, num_query, 4)
+
         inter_states, inter_references = self.decoder(
             query=target,  # (bs, sum(hw)+num_cdn, embed_dims) if dn training else None (bs, sum(hw), embed_dims)
             key=memory,  # bs, sum(hw), embed_dims
             value=memory,  # bs, sum(hw), embed_dims
             query_pos=None,
+            key_pos=None,
+            attn_masks=attn_masks,  # (bs, sum(hw)+num_cdn, sum(hw)+num_cdn) if dn training else None
+            query_key_padding_mask=None,
             # to mask input image padding area, active in cross_attention
             key_padding_mask=mask_flatten,  # bs, sum(hw)
             reference_points=reference_points,  # bs, sum(hw), 4
-            spatial_shapes=spatial_shapes,  # (nlvl, 2)
-            level_start_index=level_start_index,  # (nlvl)
+            spatial_shapes=spatial_shapes,
             valid_ratios=valid_ratios,  # (bs, nlvl, 2)
             # to mask the information leakage between gt and matching queries, active in self-attention
-            attn_masks=attn_masks,  # (bs, sum(hw)+num_cdn, sum(hw)+num_cdn) if dn training else None
-            **kwargs,
+
         )
 
         inter_references_out = inter_references
@@ -267,7 +267,7 @@ class DINOTransformer(nn.Cell):
         """Get the reference points of every pixel position of every level used in decoder.
 
         Args:
-            spatial_shapes (Tensor): The shape of all
+            spatial_shapes (List): The shape of all
                 feature maps, has shape (num_level, 2).
             valid_ratios (Tensor): The ratios of valid
                 points on the feature map, has shape
@@ -310,7 +310,7 @@ class DINOTransformer(nn.Cell):
         return valid_ratio
 
 
-class DINOTransformerEncoder(TransformerLayerSequence):
+class DINOTransformerEncoder(nn.Cell):
     def __init__(
             self,
             embed_dim: int = 256,
@@ -322,26 +322,32 @@ class DINOTransformerEncoder(TransformerLayerSequence):
             post_norm: bool = False,
             num_feature_levels: int = 4,
     ):
-        super(DINOTransformerEncoder, self).__init__(
-            transformer_layers=BaseTransformerLayer(
-                attn=MultiScaleDeformableAttention(
-                    embed_dim=embed_dim,
-                    num_heads=num_heads,
-                    dropout=attn_dropout,
-                    num_levels=num_feature_levels,
-                ),
-                ffn=FFN(
-                    embed_dim=embed_dim,
-                    feedforward_dim=feedforward_dim,
-                    output_dim=embed_dim,
-                    num_fcs=2,
-                    ffn_drop=ffn_dropout,
-                ),
-                norm=nn.LayerNorm((embed_dim,)),
-                operation_order=("self_attn", "norm", "ffn", "norm"),
-            ),
-            num_layers=num_layers,
+        super(DINOTransformerEncoder, self).__init__()
+        self.num_layers = num_layers
+        self.layers = nn.CellList(list(
+                        BaseTransformerLayer(
+                                attn=nn.CellList(list(
+                                        MultiScaleDeformableAttention(
+                                        embed_dim=embed_dim,
+                                        num_heads=num_heads,
+                                        dropout=attn_dropout,
+                                        num_levels=num_feature_levels,)
+                                    for _ in range(1))),
+                                ffn=nn.CellList(list(
+                                        FFN(
+                                        embed_dim=embed_dim,
+                                        feedforward_dim=feedforward_dim,
+                                        output_dim=embed_dim,
+                                        num_fcs=2,
+                                        ffn_drop=ffn_dropout,)
+                                    for _ in range(1))),
+                                norm=nn.CellList(list([nn.LayerNorm((embed_dim,)) for _ in range(2)])),
+                                operation_order=("self_attn", "norm", "ffn", "norm"),
+                                attn_type=('MultiScaleDeformableAttention',),
+                            )
+                    for _ in range(num_layers))
         )
+
         self.embed_dim = self.layers[0].embed_dim
         self.pre_norm = self.layers[0].pre_norm
 
@@ -350,6 +356,7 @@ class DINOTransformerEncoder(TransformerLayerSequence):
         else:
             self.post_norm_layer = None
 
+    @ms.ms_function
     def construct(
             self,
             query,
@@ -360,7 +367,8 @@ class DINOTransformerEncoder(TransformerLayerSequence):
             attn_masks=None,
             query_key_padding_mask=None,
             key_padding_mask=None,
-            **kwargs,
+            reference_points=None,
+            spatial_shapes=None,
     ):
 
         for layer in self.layers:
@@ -369,10 +377,12 @@ class DINOTransformerEncoder(TransformerLayerSequence):
                 key,
                 value,
                 query_pos=query_pos,
+                key_pos=key_pos,
                 attn_masks=attn_masks,
                 query_key_padding_mask=query_key_padding_mask,
                 key_padding_mask=key_padding_mask,
-                **kwargs,
+                reference_points=reference_points,
+                spatial_shapes=spatial_shapes,
             )
 
         if self.post_norm_layer is not None:
@@ -380,7 +390,7 @@ class DINOTransformerEncoder(TransformerLayerSequence):
         return query
 
 
-class DINOTransformerDecoder(TransformerLayerSequence):
+class DINOTransformerDecoder(nn.Cell):
     def __init__(
             self,
             embed_dim: int = 256,
@@ -393,32 +403,36 @@ class DINOTransformerDecoder(TransformerLayerSequence):
             num_feature_levels: int = 4,
             look_forward_twice=True,
     ):
-        super(DINOTransformerDecoder, self).__init__(
-            transformer_layers=BaseTransformerLayer(
-                attn=[
-                    MultiheadAttention(
-                        embed_dim=embed_dim,
-                        num_heads=num_heads,
-                        attn_drop=attn_dropout,
-                    ),
-                    MultiScaleDeformableAttention(
-                        embed_dim=embed_dim,
-                        num_heads=num_heads,
-                        dropout=attn_dropout,
-                        num_levels=num_feature_levels,
-                    ),
-                ],
-                ffn=FFN(
-                    embed_dim=embed_dim,
-                    feedforward_dim=feedforward_dim,
-                    output_dim=embed_dim,
-                    ffn_drop=ffn_dropout,
-                ),
-                norm=nn.LayerNorm((embed_dim,)),
-                operation_order=("self_attn", "norm", "cross_attn", "norm", "ffn", "norm"),
-            ),
-            num_layers=num_layers,
-        )
+        super(DINOTransformerDecoder, self).__init__()
+        self.num_layers = num_layers
+        self.layers = nn.CellList(list(
+                        BaseTransformerLayer(
+                            attn=nn.CellList([
+                                MultiheadAttention(
+                                    embed_dim=embed_dim,
+                                    num_heads=num_heads,
+                                    attn_drop=attn_dropout,
+                                ),
+                                MultiScaleDeformableAttention(
+                                    embed_dim=embed_dim,
+                                    num_heads=num_heads,
+                                    dropout=attn_dropout,
+                                    num_levels=num_feature_levels,
+                                ),
+                            ]),
+                            ffn=nn.CellList(list(
+                                    FFN(
+                                        embed_dim=embed_dim,
+                                        feedforward_dim=feedforward_dim,
+                                        output_dim=embed_dim,
+                                        ffn_drop=ffn_dropout,)
+                            for _ in range(1))),
+                            norm=nn.CellList(list(nn.LayerNorm((embed_dim,)) for _ in range (3))),
+                            operation_order=("self_attn", "norm", "cross_attn", "norm", "ffn", "norm"),
+                            attn_type=('MultiheadAttention', 'MultiScaleDeformableAttention')
+                        )
+                    for _ in range(num_layers)
+        ))
         self.return_intermediate = return_intermediate
 
         self.ref_point_head = MLP(2 * embed_dim, embed_dim, embed_dim, 2)
@@ -429,28 +443,30 @@ class DINOTransformerDecoder(TransformerLayerSequence):
         self.look_forward_twice = look_forward_twice
         self.norm = nn.LayerNorm((embed_dim,))
 
+    @ms.ms_function
     def construct(
             self,
             query,
             key,
             value,
-            query_pos=None,
+            query_pos=None,  # generated in construct from reference points
             key_pos=None,
             attn_masks=None,
             query_key_padding_mask=None,
             key_padding_mask=None,
             reference_points=None,  # (bs, num_query, 4). normalized to the valid image area
+            spatial_shapes=None,
             valid_ratios=None,  # (bs, num_level, 2)  non-pad area ratio in h and w direction
-            **kwargs,
     ):
         """
             Returns:
                 output (Tensor[bs, num_query, embed_dim]): output of each layer
                 reference_points (Tensor[bs, num_query, 4|2]): output reference point of each layer
             """
+        assert query_pos is None
         output = query
         bs, num_queries, _ = output.shape
-        if reference_points.dim() == 2:
+        if reference_points.ndim == 2:
             reference_points = ms_np.tile(reference_points.unsqueeze(0), (bs, 1, 1))  # bs, num_query, 4
 
         intermediate = []
@@ -477,25 +493,28 @@ class DINOTransformerDecoder(TransformerLayerSequence):
                 value,
                 query_pos=query_pos,
                 key_pos=key_pos,
-                query_sine_embed=query_sine_embed,
+                # query_sine_embed=query_sine_embed,
                 attn_masks=attn_masks,  # list of masks for all attention layers
                 query_key_padding_mask=query_key_padding_mask,  # key padding masks for self attention
                 key_padding_mask=key_padding_mask,  # key padding masks for cross attention
                 reference_points=reference_points_input,  # (bs, num_query, num_level, 4)
-                **kwargs,
+                spatial_shapes=spatial_shapes,
             )
 
             if self.bbox_embed is not None:
-                tmp = self.bbox_embed[layer_idx](output)  # TODO 此处开始出现累计误差 0.7113 -> 0.7116
+                tmp = self.bbox_embed[layer_idx](output)
                 if reference_points.shape[-1] == 4:
                     new_reference_points = tmp + inverse_sigmoid(reference_points)
-                    new_reference_points = new_reference_points.sigmoid()
+                    new_reference_points = ops.sigmoid(new_reference_points)
                 else:
                     assert reference_points.shape[-1] == 2
                     new_reference_points = tmp
                     new_reference_points[..., :2] = tmp[..., :2] + inverse_sigmoid(reference_points)
-                    new_reference_points = new_reference_points.sigmoid()
+
+                    new_reference_points = ops.sigmoid(new_reference_points)
                 reference_points = ops.stop_gradient(new_reference_points)
+            else:
+                raise NotImplementedError('box_embed must be defined')
 
             if self.return_intermediate:
                 intermediate.append(self.norm(output))
