@@ -26,7 +26,7 @@ def sigmoid_focal_loss(inputs, targets, num_boxes, alpha: float = 0.25, gamma: f
     Returns:
         torch.Tensor: The computed sigmoid focal loss.
     """
-    prob = inputs.sigmoid()
+    prob = ops.sigmoid(inputs)
     _, _, num_class = inputs.shape
     weight = ops.ones(num_class, inputs.dtype)
     pos_weight = ops.ones(num_class, inputs.dtype)
@@ -116,9 +116,11 @@ class SetCriterion(nn.Cell):
 
         # (bs, num_query)  value=80
         target_classes = ms_np.full((bs, num_query), self.num_classes, dtype=ms.float32)
-        for i in range(bs):
-            one_tc =ops.gather(tgt_labels[i].astype(ms.float32), tgt_ind[i], 0)  # (bs, num_pad_box)
-            target_classes[i] = ops.scatter_update(target_classes[i], src_ind[i], one_tc)
+        # for i in range(bs):
+        #     one_tc =ops.gather(tgt_labels[i].astype(ms.float32), tgt_ind[i], 0)  # (bs, num_pad_box)
+        #     target_classes[i] = ops.scatter_update(target_classes[i], src_ind[i], one_tc)
+        tc = ops.gather_elements(tgt_labels.astype(ms.float32), 1, tgt_ind)
+        target_classes = ops.tensor_scatter_elements(target_classes, src_ind, tc, 1)
         target_classes = target_classes.astype(ms.int32)
 
         # Computation classification loss
@@ -203,6 +205,7 @@ class SetCriterion(nn.Cell):
 
         return losses
 
+    # FIXME @ms.ms_function 1.dict has no update  2. cannot return dict
     def get_loss(self, outputs, targets, indices):
         losses = {}
         losses.update(self.loss_labels(outputs, targets, indices))

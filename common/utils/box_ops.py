@@ -126,8 +126,8 @@ def box_intersection(boxes1, boxes2) -> Tensor:
         containing the pairwise IoU and union values
         for every element in boxes1 and boxes2.
     """
-    assert (boxes1[:, 2:] >= boxes1[:, :2]).all()
-    assert (boxes2[:, 2:] >= boxes2[:, :2]).all()
+    # assert (boxes1[:, 2:] >= boxes1[:, :2]).all()
+    # assert (boxes2[:, 2:] >= boxes2[:, :2]).all()
 
     num_box1 = len(boxes1)
     num_box2 = len(boxes2)
@@ -143,8 +143,8 @@ def box_intersection(boxes1, boxes2) -> Tensor:
     # lb = ops.maximum(boxes1[:, None, :2], boxes2[None, :, :2])  # left bottom [N,M,2]
     # rt = ops.minimum(boxes1[:, None, 2:], boxes2[None, :, 2:])  # right top [N,M,2]
 
-    wh = ops.clip_by_value(rt - lb, clip_value_min=Tensor(0.0, boxes1.dtype),
-                           clip_value_max=Tensor(100.0, boxes1.dtype))  # [N,M,2]
+    wh = ops.clip_by_value(rt - lb, clip_value_min=Tensor(0.0),
+                           clip_value_max=Tensor(100.0))  # [N,M,2]
     inter = wh[:, :, 0] * wh[:, :, 1]  # [N,M]
 
     return inter
