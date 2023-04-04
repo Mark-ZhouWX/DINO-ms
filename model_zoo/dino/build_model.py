@@ -58,6 +58,7 @@ def build_dino(unit_test=False):
             return_intermediate=True,
             num_feature_levels=4,
         ),
+        embed_dim=256,
         num_feature_levels=4,
         two_stage_num_proposals=num_queries,
     )

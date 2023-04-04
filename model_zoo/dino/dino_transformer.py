@@ -20,6 +20,51 @@ def linspace(start: Tensor, end: Tensor, num):
     return res
 
 
+@ms.ms_function
+def get_valid_ratio(mask):
+    """Get the valid(non-pad) ratios of feature maps of all levels."""
+    _, H, W = mask.shape
+    h_mask_not, w_mask_not = ~mask[:, :, 0], ~mask[:, 0, :]
+    if mask.dtype != ms.float_:
+        h_mask_not = ops.cast(h_mask_not, ms.float32)
+        w_mask_not = ops.cast(w_mask_not, ms.float32)
+    valid_H = h_mask_not.sum(1)
+    valid_W = w_mask_not.sum(1)
+    valid_ratio_h = valid_H.astype(ms.float32) / H
+    valid_ratio_w = valid_W.astype(ms.float32) / W
+    valid_ratio = ops.stack([valid_ratio_w, valid_ratio_h], -1)
+    return valid_ratio
+
+
+@ms.ms_function
+def multi_2_flatten(multi_level_feats, multi_level_masks, multi_level_pos_embeds, level_embeds):
+    feat_flatten = []
+    mask_flatten = []
+    lvl_pos_embed_flatten = []
+    spatial_shapes = []
+    for lvl, (feat, mask, pos_embed) in enumerate(
+            zip(multi_level_feats, multi_level_masks, multi_level_pos_embeds)
+    ):
+        bs, c, h, w = feat.shape
+        spatial_shape = (h, w)
+        spatial_shapes.append(spatial_shape)
+
+        feat = feat.view(bs, c, -1).transpose(0, 2, 1)  # bs, hw, c
+        mask = mask.view(bs, -1)  # bs, hw
+        pos_embed = pos_embed.view(bs, c, -1).transpose(0, 2, 1)  # bs, hw, c
+        # FIXME level embed dose not support __getitem__ method
+        # lvl_pos_embed = pos_embed
+        lvl_pos_embed = pos_embed + level_embeds[lvl].view(1, 1, -1)  # multi-scale embed
+        lvl_pos_embed_flatten.append(lvl_pos_embed)
+        feat_flatten.append(feat)
+        mask_flatten.append(mask)
+    feat_flatten = ops.concat(feat_flatten, 1)
+    mask_flatten = ops.concat(mask_flatten, 1)
+    lvl_pos_embed_flatten = ops.concat(lvl_pos_embed_flatten, 1)
+    # there may be slight difference of ratio values between different level due to of mask quantization
+    return feat_flatten, mask_flatten, lvl_pos_embed_flatten, spatial_shapes
+
+
 class DINOTransformer(nn.Cell):
     """Transformer module for DINO
 
@@ -35,6 +80,7 @@ class DINOTransformer(nn.Cell):
             self,
             encoder=None,
             decoder=None,
+            embed_dim=256,
             num_feature_levels=4,
             two_stage_num_proposals=900,
             learnt_init_query=True,
@@ -45,9 +91,11 @@ class DINOTransformer(nn.Cell):
         self.num_feature_levels = num_feature_levels
         self.two_stage_num_proposals = two_stage_num_proposals
 
-        self.embed_dim = self.encoder.embed_dim
+        # self.embed_dim = self.encoder.embed_dim
+        self.embed_dim = embed_dim
 
         self.level_embeds = ms.Parameter(init.initializer(init.Uniform(), (self.num_feature_levels, self.embed_dim)))
+        self.level_embeds_list = ops.split(self.level_embeds, 0, self.num_feature_levels)
         # self.level_embeds = nn.Embedding(self.num_feature_levels, self.embed_dim)
         self.learnt_init_query = learnt_init_query
         if self.learnt_init_query:
@@ -75,29 +123,10 @@ class DINOTransformer(nn.Cell):
                 len of list is 2, initial gt query for dn, including content_query and position query(reference point)
             attn_masks (List[Tensor]): attention map for dn
         """
-        feat_flatten = []
-        mask_flatten = []
-        lvl_pos_embed_flatten = []
-        spatial_shapes = []
-        for lvl, (feat, mask, pos_embed) in enumerate(
-                zip(multi_level_feats, multi_level_masks, multi_level_pos_embeds)
-        ):
-            bs, c, h, w = feat.shape
-            spatial_shape = (h, w)
-            spatial_shapes.append(spatial_shape)
+        feat_flatten, mask_flatten, lvl_pos_embed_flatten, spatial_shapes = \
+            multi_2_flatten(multi_level_feats, multi_level_masks, multi_level_pos_embeds, self.level_embeds_list)
 
-            feat = feat.view(bs, c, -1).transpose(0, 2, 1)  # bs, hw, c
-            mask = mask.view(bs, -1)  # bs, hw
-            pos_embed = pos_embed.view(bs, c, -1).transpose(0, 2, 1)  # bs, hw, c
-            lvl_pos_embed = pos_embed + self.level_embeds[lvl].view(1, 1, -1)  # multi-scale embed
-            lvl_pos_embed_flatten.append(lvl_pos_embed)
-            feat_flatten.append(feat)
-            mask_flatten.append(mask)
-        feat_flatten = ops.concat(feat_flatten, 1)
-        mask_flatten = ops.concat(mask_flatten, 1)
-        lvl_pos_embed_flatten = ops.concat(lvl_pos_embed_flatten, 1)
-        # there may be slight difference of ratio values between different level due to of mask quantization
-        valid_ratios = ops.stack([self.get_valid_ratio(m) for m in multi_level_masks], 1)  # (bs, num_level, 2)
+        valid_ratios = ops.stack([get_valid_ratio(m) for m in multi_level_masks], 1)  # (bs, num_level, 2)
 
         # reference_points for deformable-attn, range (H, W), un-normalized, flattened
         reference_points = self.get_reference_points(spatial_shapes, valid_ratios)  # (bs sum(hw), nl, 2)
@@ -120,53 +149,17 @@ class DINOTransformer(nn.Cell):
         )
 
         # (bs, sum(hw), c); (bs, sum(hw), 4) unsigmoided + valid
-        output_memory, output_proposals = self.gen_encoder_output_proposals(
-            memory, mask_flatten, spatial_shapes
-        )
+        output_memory, output_proposals = self.gen_encoder_output_proposals(memory, mask_flatten, spatial_shapes)
 
-        # two-stage
-        # hack implementaion, the class_embed of the last layer of transformer.decoder serves for two stage
-        enc_outputs_class = self.decoder.class_embed[self.decoder.num_layers](output_memory)
-        enc_outputs_coord_unact = (
-                self.decoder.bbox_embed[self.decoder.num_layers](output_memory) + output_proposals
-        )  # unsigmoided. (bs, sum(hw), 4)
+        reference_points, target, target_unact, topk_coords_unact = self.perform_two_stage(output_memory, output_proposals)
 
-        topk = self.two_stage_num_proposals
-
-        # from mindspore import Tensor, ops
-        # import mindspore.common.initializer as init
-        # enc_outputs_class = Tensor(shape = (4, 8, 12), dtype=ms.float32, init=init.Uniform())
-        # print(enc_outputs_class.shape)
-        # print(enc_outputs_class.max(-1)[0])
-        # topk = 3
-        # torch.max returns a tuple (value, index), mindspore.ops.max return a tensor (value)
-
-        # k must be the last axis
-        topk_proposals = ops.top_k(enc_outputs_class.max(-1), topk)[1]  # index (bs, k) , k=num_query
-        # extract region proposal boxes
-        topk_coords_unact = ops.gather_elements(
-            enc_outputs_coord_unact, 1, ms_np.tile(ops.expand_dims(topk_proposals, -1), (1, 1, 4)),
-        )  # unsigmoided. (bs, k, 4)
-        reference_points = ops.stop_gradient(topk_coords_unact).sigmoid()
+        # add dn part to reference points and targets
         if query_embed[1] is not None:
-            reference_points = ops.concat([query_embed[1].sigmoid(), reference_points], 1)
+            reference_points = ops.concat([ops.sigmoid(query_embed[1]), reference_points], 1)
         init_reference_out = reference_points
 
-        # extract region features
-
-        target_unact = ops.gather_elements(
-            output_memory, 1, ms_np.tile(ops.expand_dims(topk_proposals, -1), (1, 1, output_memory.shape[-1]))
-        )
-        if self.learnt_init_query:
-            bs = multi_level_feats[0].shape[0]
-            target = ms_np.tile(self.tgt_embed.embedding_table[None], (bs, 1, 1))
-        else:
-            target = ops.stop_gradient(target_unact)
         if query_embed[0] is not None:
             target = ops.concat([query_embed[0], target], 1)
-
-        # decoder
-        # (num_trans_layer, bs, num_query, embed_dim),   (num_trans_layer, bs, num_query, 4)
 
         inter_states, inter_references = self.decoder(
             query=target,  # (bs, sum(hw)+num_cdn, embed_dims) if dn training else None (bs, sum(hw), embed_dims)
@@ -191,7 +184,7 @@ class DINOTransformer(nn.Cell):
             init_reference_out,
             inter_references_out,
             target_unact,
-            topk_coords_unact.sigmoid(),
+            ops.sigmoid(topk_coords_unact),
         )
 
     def init_weights(self):
@@ -204,12 +197,45 @@ class DINOTransformer(nn.Cell):
         # p_shape, d_type = self.level_embeds.shape, self.level_embeds.dtype
         # self.level_embeds.set_data(init.initializer(init.Uniform(), p_shape, d_type))
 
+    @ms.ms_function
+    def perform_two_stage(self, output_memory, output_proposals):
+        # two-stage
+        # hack implementaion, the class_embed of the last layer of transformer.decoder serves for two stage
+        enc_outputs_class = self.decoder.class_embed[self.decoder.num_layers](output_memory)
+        enc_outputs_coord_unact = (
+                self.decoder.bbox_embed[self.decoder.num_layers](output_memory) + output_proposals
+        )  # unsigmoided. (bs, sum(hw), 4)
+
+        topk = self.two_stage_num_proposals
+
+        # k must be the last axis
+        topk_proposals = ops.top_k(enc_outputs_class.max(-1), topk)[1]  # index (bs, k) , k=num_query
+        # extract region proposal boxes
+        topk_coords_unact = ops.gather_elements(
+            enc_outputs_coord_unact, 1, ms_np.tile(ops.expand_dims(topk_proposals, -1), (1, 1, 4)),
+        )  # unsigmoided. (bs, k, 4)
+        reference_points = ops.sigmoid(ops.stop_gradient(topk_coords_unact))
+
+        # extract region features
+
+        target_unact = ops.gather_elements(
+            output_memory, 1, ms_np.tile(ops.expand_dims(topk_proposals, -1), (1, 1, output_memory.shape[-1]))
+        )
+        if self.learnt_init_query:
+            bs = output_memory.shape[0]
+            target = ms_np.tile(self.tgt_embed.embedding_table[None], (bs, 1, 1))
+        else:
+            target = ops.stop_gradient(target_unact)
+
+        return reference_points, target, target_unact, topk_coords_unact
+
+    @ms.ms_function
     def gen_encoder_output_proposals(self, memory, memory_padding_mask, spatial_shapes):
         """
         Args:
             memory (Tensor[bs, sum(hw), c]): flattened encoder memory
             memory_padding_mask (Tensor[bs, sum(hw)]): padding_mask of memory
-            spatial_shapes (Tensor[num_layer, 2]): spatial shapes of multiscale layer
+            spatial_shapes (List[num_layer, 2]): spatial shapes of multiscale layer
         Returns:
             Tensor[bs, sum(hw), c]: filtered memory
             Tensor[bs, sum(hw), 4]: filtered bbox proposals
@@ -262,8 +288,8 @@ class DINOTransformer(nn.Cell):
         output_memory = self.enc_output_norm(self.enc_output(output_memory))  # channel-wise mlp
         return output_memory, output_proposals
 
-    @staticmethod
-    def get_reference_points(spatial_shapes, valid_ratios):
+    @ms.ms_function
+    def get_reference_points(self, spatial_shapes, valid_ratios):
         """Get the reference points of every pixel position of every level used in decoder.
 
         Args:
@@ -294,20 +320,6 @@ class DINOTransformer(nn.Cell):
         reference_points = ops.concat(reference_points_list, 1)  # (bs, sum(hw), 2)
         reference_points = reference_points[:, :, None] * valid_ratios[:, None]  # (bs sum(hw), nl, 2)
         return reference_points
-
-    def get_valid_ratio(self, mask):
-        """Get the valid(non-pad) ratios of feature maps of all levels."""
-        _, H, W = mask.shape
-        h_mask_not, w_mask_not = ~mask[:, :, 0], ~mask[:, 0, :]
-        if mask.dtype != ms.float_:
-            h_mask_not = ops.cast(h_mask_not, ms.float32)
-            w_mask_not = ops.cast(w_mask_not, ms.float32)
-        valid_H = h_mask_not.sum(1)
-        valid_W = w_mask_not.sum(1)
-        valid_ratio_h = valid_H.astype(ms.float32) / H
-        valid_ratio_w = valid_W.astype(ms.float32) / W
-        valid_ratio = ops.stack([valid_ratio_w, valid_ratio_h], -1)
-        return valid_ratio
 
 
 class DINOTransformerEncoder(nn.Cell):
@@ -355,6 +367,7 @@ class DINOTransformerEncoder(nn.Cell):
             self.post_norm_layer = nn.LayerNorm(self.embed_dim)
         else:
             self.post_norm_layer = None
+        self.enable_tuple_broaden = True
 
     @ms.ms_function
     def construct(
@@ -442,6 +455,7 @@ class DINOTransformerDecoder(nn.Cell):
         self.class_embed = None
         self.look_forward_twice = look_forward_twice
         self.norm = nn.LayerNorm((embed_dim,))
+        self.enable_tuple_broaden = True
 
     @ms.ms_function
     def construct(
