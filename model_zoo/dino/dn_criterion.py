@@ -50,11 +50,14 @@ class TwoStageCriterion(SetCriterion):
         indices = self.matcher(outputs_last_encoder, targets)  # [(ind_src, ind_tgt)], len(indices)=bs
 
         # Compute all the requested losses
-        losses = {}
+        base_loss_names = ['loss_class', 'loss_bbox', 'loss_giou']
+        loss_names = []
+        loss_values = []
 
         # get 3 basic loss, label, bbox and giou
         loss_last_decoder = self.get_loss(outputs_last_encoder, targets, indices)
-        losses.update(loss_last_decoder)
+        loss_names.extend(base_loss_names)
+        loss_values.extend(loss_last_decoder)
 
         # In case of auxiliary losses, we repeat this process with the output of each intermediate layer.
         if outputs_auxiliary is not None:
@@ -63,8 +66,8 @@ class TwoStageCriterion(SetCriterion):
                 aux_out = (outputs_auxiliary[0][i], outputs_auxiliary[1][i])
                 aux_ind = self.matcher(aux_out, targets)
                 loss_aux = self.get_loss(aux_out, targets, aux_ind)
-                l_dict = {k + f"_{i}": v for k, v in loss_aux.items()}
-                losses.update(l_dict)
+                loss_names.extend([k + f"_{i}" for k in base_loss_names])
+                loss_values.extend(loss_aux)
 
         # for two stage
         if outputs_encoder is not None:
@@ -74,9 +77,10 @@ class TwoStageCriterion(SetCriterion):
                     bt["labels"] = ops.zeros_like(bt["labels"])
             enc_ind = self.matcher(outputs_encoder, targets)
             loss_enc = self.get_loss(outputs_encoder, targets, enc_ind)
-            l_dict = {k + "_enc": v for k, v in loss_enc.items()}
-            losses.update(l_dict)
+            loss_names.extend([k + "_enc" for k in base_loss_names])
+            loss_values.extend(loss_enc)
 
+        losses = {k: v for k, v in zip(loss_names, loss_values)}
         return losses
 
 class DINOCriterion(TwoStageCriterion):

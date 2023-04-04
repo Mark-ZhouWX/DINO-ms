@@ -153,9 +153,7 @@ class SetCriterion(nn.Cell):
         else:
             raise NotImplementedError(f'support only ce_loss and focal_loss, but got {self.loss_class_type}')
 
-        losses = {"loss_class": loss_class}
-
-        return losses
+        return loss_class
 
     def loss_boxes(self, outputs, targets, indices):
         """
@@ -181,11 +179,10 @@ class SetCriterion(nn.Cell):
             sorted_src_boxes[i] = ops.gather(src_boxes[i], src_ind[i], 0)
             sorted_tgt_boxes[i] = ops.gather(tgt_boxes[i], tgt_ind[i], 0)
 
-        losses = {}
         loss_bbox = self.l1_loss(sorted_src_boxes, sorted_tgt_boxes)
 
         loss_bbox *= tgt_valids.astype(ms.float32).reshape(bs, num_pad_box, 1)
-        losses["loss_bbox"] = loss_bbox.sum() / num_valid_box
+        loss_bbox = loss_bbox.sum() / num_valid_box
 
         # (bs, num_pad_box, 4) -> (bs*num_pad_box, 4) -> (bs*num_pad_box, bs*num_pad_box) -> (bs*num_pad_box,)
         giou_matrix = generalized_box_iou(box_cxcywh_to_xyxy(sorted_src_boxes.reshape(bs*num_pad_box, 4)),
@@ -201,17 +198,17 @@ class SetCriterion(nn.Cell):
         # loss_giou = ops.stack(loss_giou_list)  # (bs, num_pad_box)
         # loss_giou *= tgt_valids.astype(ms.float32)
 
-        losses["loss_giou"] = loss_giou.sum() / num_valid_box
+        loss_giou = loss_giou.sum() / num_valid_box
 
-        return losses
+        return loss_bbox, loss_giou
 
     # FIXME @ms.ms_function 1.dict has no update  2. cannot return dict
+    @ms.ms_function
     def get_loss(self, outputs, targets, indices):
-        losses = {}
-        losses.update(self.loss_labels(outputs, targets, indices))
-        losses.update(self.loss_boxes(outputs, targets, indices))
+        loss_label = self.loss_labels(outputs, targets, indices)
+        loss_l1, loss_giou = self.loss_boxes(outputs, targets, indices)
 
-        return losses
+        return loss_label, loss_l1, loss_giou
 
     def construct(self, outputs, targets):
         """
