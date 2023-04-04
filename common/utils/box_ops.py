@@ -131,13 +131,13 @@ def box_intersection(boxes1, boxes2) -> Tensor:
 
     num_box1 = len(boxes1)
     num_box2 = len(boxes2)
-    broadcast1 = ms_np.tile(boxes1[:, None, :2], (1, num_box2, 1))
-    broadcast2 = ms_np.tile(boxes2[None, :, :2], (num_box1, 1, 1))
 
     # Caution:, be careful about the maximum operator. if the input is need broadcast, you'd better do it manually.
     # otherwise loss overflow or bankrupt may occur
-    lb = ops.maximum(broadcast1, broadcast2)  # left bottom [N,M,2]
-    rt = ops.minimum(broadcast1, broadcast2)  # right top [N,M,2]
+    lb = ops.maximum(ms_np.tile(boxes1[:, None, :2], (1, num_box2, 1)),
+                     ms_np.tile(boxes2[None, :, :2], (num_box1, 1, 1)))  # left bottom [N,M,2]
+    rt = ops.minimum(ms_np.tile(boxes1[:, None, 2:], (1, num_box2, 1)),
+                     ms_np.tile(boxes2[None, :, 2:], (num_box1, 1, 1)))  # right top [N,M,2]
 
     # this is the version that would cause loss overflow problem
     # lb = ops.maximum(boxes1[:, None, :2], boxes2[None, :, :2])  # left bottom [N,M,2]
@@ -196,11 +196,11 @@ def box_mer_area(boxes1, boxes2) -> Tensor:
     """
     num_box1 = len(boxes1)
     num_box2 = len(boxes2)
-    broadcast1 = ms_np.tile(boxes1[:, None, :2], (1, num_box2, 1))
-    broadcast2 = ms_np.tile(boxes2[None, :, :2], (num_box1, 1, 1))
 
-    lt = ops.minimum(broadcast1, broadcast2)
-    rb = ops.maximum(broadcast1, broadcast2)
+    lt = ops.minimum(ms_np.tile(boxes1[:, None, :2], (1, num_box2, 1)),
+                     ms_np.tile(boxes2[None, :, :2], (num_box1, 1, 1)))
+    rb = ops.maximum(ms_np.tile(boxes1[:, None, 2:], (1, num_box2, 1)),
+                     ms_np.tile(boxes2[None, :, 2:], (num_box1, 1, 1)))
     wh = ops.clip_by_value((rb - lt), clip_value_min=Tensor(0.0))  # [N,M,2]
     area = wh[:, :, 0] * wh[:, :, 1]
     return area
@@ -230,5 +230,5 @@ def generalized_box_iou(boxes1, boxes2, eps=1e-6) -> Tensor:
 
     # area of box minimum exterior rectangle (MER)
     area = box_mer_area(boxes1, boxes2)
-    corner = ops.clip_by_value(area - union, clip_value_min=Tensor(0.0))
+    corner = area - union
     return iou - corner / (area + eps)
