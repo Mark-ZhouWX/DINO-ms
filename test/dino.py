@@ -151,7 +151,9 @@ def convert_input_format(batched_inputs):
     gt_classes_list = []
     gt_boxes_list = []
     gt_valids_list = []
+    dn_valids_list = []
     num_pad_box = 100
+    num_dn = 100
     for targets_per_image in gt_instances:
         h, w = targets_per_image['image_size']
         image_size_xyxy = Tensor([w, h, w, h], dtype=ms.float32)
@@ -171,11 +173,16 @@ def convert_input_format(batched_inputs):
         # np_gt_box  = np.concatenate([gt_boxes.asnumpy(), default_boxes], axis=0)
         np_gt_box = np.pad(gt_boxes.asnumpy(), ((0, num_pad_box - num_inst), (0, 0)), mode="constant", constant_values=0)
 
+        dn_valid = np.zeros((num_dn,), dtype=np.bool_)
+        end_index = num_dn - (num_dn % num_inst) if num_inst<num_dn else num_dn
+        dn_valid[:end_index] = True
+
         gt_classes_list.append(Tensor(np_gt_label, ms.int32))
         gt_boxes_list.append(Tensor(np_gt_box, ms.float32))
         gt_valids_list.append(Tensor(np_gt_valid, ms.bool_))
+        dn_valids_list.append(Tensor(dn_valid, ms.bool_))
 
-    return images, img_masks, ops.stack(gt_classes_list), ops.stack(gt_boxes_list), ops.stack(gt_valids_list)
+    return images, img_masks, ops.stack(gt_classes_list), ops.stack(gt_boxes_list), ops.stack(gt_valids_list), ops.stack(dn_valids_list)
 
 
 if __name__ == "__main__":
@@ -188,7 +195,7 @@ if __name__ == "__main__":
     pth_dir = r"C:\02Data\models" if is_windows else './pretrained_model/'
     ms_pth_path = os.path.join(pth_dir, "ms_dino_r50_4scale_12ep_49_2AP.ckpt")
 
-    network, criterion = build_dino(unit_test=True)
+    network, criterion = build_dino(unit_test=False)
 
     # # set mix precision
     # dino.to_float(ms.float16)
@@ -199,8 +206,8 @@ if __name__ == "__main__":
     ms.load_checkpoint(ms_pth_path, network)
 
     inputs, _ = get_input()
-    images, img_masks, gt_classes_list, gt_boxes_list, gt_valids_list = convert_input_format(inputs)
-    inputs = images, img_masks, (gt_classes_list, gt_boxes_list, gt_valids_list)
+    images, img_masks, gt_classes_list, gt_boxes_list, gt_valids_list, dn_valids_list = convert_input_format(inputs)
+    inputs = images, img_masks, (gt_classes_list, gt_boxes_list, gt_valids_list, dn_valids_list)
     if infer:
         network.set_train(False)
         inf_result = network(inputs)

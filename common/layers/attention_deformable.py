@@ -111,7 +111,7 @@ class MultiScaleDeformableAttention(nn.Cell):
         pshape, dtype = self.output_proj.bias.shape, self.output_proj.bias.dtype
         self.output_proj.bias.set_data(init.initializer('zeros', pshape, dtype))
 
-    @ms.ms_function
+    # @ms.ms_function
     def construct(
         self,
         query: Tensor,

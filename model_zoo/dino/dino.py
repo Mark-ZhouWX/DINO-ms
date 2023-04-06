@@ -10,7 +10,7 @@ import mindspore.common.initializer as init
 import mindspore.numpy as ms_np
 
 from common.layers.mlp import MLP
-from common.utils.misc import inverse_sigmoid
+from common.utils.misc import inverse_sigmoid, replace_invalid
 from common.utils.box_ops import box_cxcywh_to_xyxy, box_xyxy_to_cxcywh
 from common.utils.postprocessing import detector_postprocess
 from common.utils.preprocessing import pad_as_batch
@@ -51,7 +51,7 @@ class DINO(nn.Cell):
                  num_queries: int,
                  aux_loss: bool = True,
                  select_box_nums_for_evaluation: int = 300,
-                 dn_number: int = 100,
+                 num_dn: int = 100,
                  label_noise_ratio: float = 0.2,
                  box_noise_scale: float = 1.0,
                  input_format: Optional[str] = "RGB",
@@ -83,7 +83,8 @@ class DINO(nn.Cell):
 
         # de-noising
         self.label_enc = nn.Embedding(num_classes, embed_dim)
-        self.dn_number = dn_number
+        self.num_dn = num_dn
+        self.num_cdn = num_dn * 2
         self.label_noise_ratio = label_noise_ratio
         self.box_noise_scale = box_noise_scale
 
@@ -191,19 +192,17 @@ class DINO(nn.Cell):
         # de-noising preprocessing
         # prepare label query embeding
         if self.training:
-            input_query_label, input_query_bbox, attn_mask, dn_meta = self.prepare_for_cdn(
+            input_query_label, input_query_bbox, attn_mask, dn_valids = self.cdn_preprocess(
                 targets,
-                dn_number=self.dn_number,
+                num_dn=self.num_dn,
                 label_noise_ratio=self.label_noise_ratio,
                 box_noise_scale=self.box_noise_scale,
-                num_queries=self.num_queries,
+                num_query=self.num_queries,
                 num_classes=self.num_classes,
-                hidden_dim=self.embed_dim,
-                label_enc=self.label_enc,
             )
         else:
             # inference does not need dn
-            input_query_label, input_query_bbox, attn_mask, dn_meta = None, None, None, None
+            input_query_label, input_query_bbox, attn_mask, dn_valids = None, None, None, None
         query_embeds = (input_query_label, input_query_bbox)
 
         # feed into transformer
@@ -241,12 +240,12 @@ class DINO(nn.Cell):
         # [num_decoder_layers, bs, num_query, 4]
         outputs_coord = ops.stack(outputs_coords)
 
-        # de-noising postprocessing
-        if dn_meta is not None:
-            outputs_class, outputs_coord = self.dn_post_process(outputs_class, outputs_coord, dn_meta)
+        # de-noising postprocessing, separate dn gt query and normal match query
+        outputs_class, outputs_coord, gt_query_class, gt_query_coord = \
+            self.cdn_postprocess(outputs_class, outputs_coord, self.num_cdn)
 
-        # output (tuple(tuple(Tensor))) with size 3 -> last, aux, two_stage
-        output = [None, None, None]
+        # output (tuple(tuple(Tensor))) with size 3 -> last, aux, two_stage, dn_last, dn_aux
+        output = [None, None, None, None, None]
 
         # prepare for loss computation
         output[0] = (outputs_class[-1], outputs_coord[-1])
@@ -261,212 +260,114 @@ class DINO(nn.Cell):
         interm_class = self.transformer.decoder.class_embed[-1](enc_state)
         output[2] = (interm_class, interm_coord)
 
+        if self.num_dn > 0:
+            output[3] = (gt_query_class[-1], gt_query_coord[-1])
+            if self.aux_loss:
+                output[4] = (gt_query_class[:-1], gt_query_coord[:-1])
+
         return output
 
-    def dn_post_process(self, outputs_class, outputs_coord, dn_metas):
-        """fill output_known bboxes and logits in dn_meta, separate predictions of gt and matching part"""
-        if dn_metas and dn_metas["single_padding"] > 0:
-            padding_size = dn_metas["single_padding"] * dn_metas["dn_num"]
-            output_known_class = outputs_class[:, :, :padding_size, :]
-            output_known_coord = outputs_coord[:, :, :padding_size, :]
-            outputs_class = outputs_class[:, :, padding_size:, :]
-            outputs_coord = outputs_coord[:, :, padding_size:, :]
+    @ms.ms_function
+    def cdn_postprocess(self, outputs_class, outputs_coord, num_cdn):
+        """
+        cdn postporcess
+        Args:
+            outputs_class (Tensor[[num_decoder_layers, bs, num_query, 4]]): outputs class with gt and match query
+            outputs_coord (Tensor[[num_decoder_layers, bs, num_query, 4]]): outputs box coordinates
+             with gt and match query
+            num_cdn (int): number of contrastive de-noising query
+        """
+        if num_cdn <= 0:
+            return outputs_class, outputs_coord, None, None
 
-            out = {"pred_logits": output_known_class[-1], "pred_boxes": output_known_coord[-1]}
-            if self.aux_loss:
-                # output of the layers before the last one
-                out["aux_outputs"] = self._set_aux_loss(output_known_class, output_known_coord)
-            dn_metas["output_known_lbs_bboxes"] = out
-        return outputs_class, outputs_coord
+        gt_query_class = outputs_class[:, :, :num_cdn, :]
+        gt_query_coord = outputs_coord[:, :, :num_cdn, :]
+        match_query_class = outputs_class[:, :, num_cdn:, :]
+        match_query_coord = outputs_coord[:, :, num_cdn:, :]
 
-    def prepare_for_cdn(
+        return match_query_class, match_query_coord, gt_query_class, gt_query_coord
+
+    @ms.ms_function
+    def cdn_preprocess(
             self,
             targets,
-            dn_number,
+            num_dn,
             label_noise_ratio,
             box_noise_scale,
-            num_queries,
+            num_query,
             num_classes,
-            hidden_dim,
-            label_enc,
     ):
         """
-        A major difference of DINO from DN-DETR is that the author process pattern embedding
-            in its detector
-        forward function and use learnable tgt embedding, so we change this function a little.
+        generate cdn gt query
         Args:
-            dn_number: total number of positive gt queries
-            num_queries: number of quires
-            num_classes: number of classes
-            hidden_dim: transformer hidden dim
-            label_enc: encode labels in dn
-        :return:
+            targets (Tuple[Tensor]): tuple of gt label, bbox, valid mask and dn_positive_id, dn_valid_mask
+            num_dn (int): positive dn number
+            label_enc (nn.Embedding[num_class, embed_dim]): label embedding table
         """
-        if dn_number <= 0:
-            return None, None, None, None
-        dn_number = dn_number * 2  # positive and negative
-        # [labels_0, labels_1, ...] len(label_i)=num_instance of image_i
-        # eg: [(1,1,1), (1,1), (1,1,1,1)], batch_size=3, num_instance in each image is 3,2,4
-        known = [(ops.ones_like(t["labels"])) for t in targets]  # len(known)=batch_size
-        batch_size = len(known)
-        # num_instance of each image
-        # eg: [3, 2, 4]
-        known_num = [sum(k) for k in known]
-        if int(max(known_num)) == 0:
+        if num_dn <= 0:
             return None, None, None, None
 
-        # gt_query group num, each group has the length of max_num_instance
-        dn_number = dn_number // (int(max(known_num) * 2))
 
-        if dn_number == 0:
-            dn_number = 1
-        # flattened labels, (sum(instance_i))
-        # eg: [7,3,2, 6,8, 9,1,4,5]
-        labels = ops.concat([t["labels"] for t in targets])
-        # flattened boxes (sum(instance_i), 4)
-        boxes = ops.concat([t["boxes"] for t in targets])
-        # flattened batch_id
-        # [0,0,0, 1,1, 2,2,2,2]
-        batch_idx = ops.concat(
-            [ms_np.full_like(t["labels"].long(), i) for i, t in enumerate(targets)]
-        )
+        tgt_labels, tgt_boxes, tgt_valids = targets[:3]
+        dn_valids = targets[3]
+        assert dn_valids.shape[1] == num_dn, f"num_dn should be set as the same in dataset({dn_valids.shape[1]}) and model({num_dn})"
+        bs, num_pad_box = tgt_labels.shape
+        tgt_labels = replace_invalid(tgt_labels, tgt_valids, num_classes - 1)
+        num_valid_box = ops.reduce_sum(tgt_valids.astype(ms.float32), 1).astype(ms.int32)  # (bs)
 
-        # (sum(instance_i) * 2 * dn_number)
-        known_labels = ms_np.tile(labels, (2 * dn_number, 1)).view(-1)
-        # (sum(instance_i) * 2 * dn_number)
-        # eg: [0,0,0, 1,1, 2,2,2,2,  0,0,0, 1,1, 2,2,2,2, ...]
-        known_bid = ms_np.tile(batch_idx, (2 * dn_number, 1)).view(-1)
-        # (sum(instance_i)* 2 * dn_number, 4)
-        known_bboxs = ms_np.tile(boxes, (2 * dn_number, 1))
-        known_labels_expaned = copy.deepcopy(known_labels)
-        known_bbox_expand = copy.deepcopy(known_bboxs)
+        dn_positive_ids = ops.expand_dims(ms_np.arange(num_dn), 0) % num_valid_box.expand_dims(1)  # (bs, num_dn)
+        dn_positive_ids = replace_invalid(dn_positive_ids, dn_valids, num_pad_box-1)  # 012 012 012 -1
+
+        known_labels = ops.gather_elements(tgt_labels, 1, dn_positive_ids)  # (bs, num_dn)
+        known_boxes = ops.gather_elements(tgt_boxes, 1, ms_np.tile(ops.expand_dims(dn_positive_ids, -1), (1, 1, 4)))
+
+        # add negative query
+        num_cdn = num_dn * 2
+        known_labels = ops.concat([known_labels, known_labels], axis=1)  # (bs, num_cdn)
+        known_boxes = ops.concat([known_boxes, known_boxes], axis=1)  # (bs, num_cdn, 4)
+        # cdn_valids = ops.concat([dn_valids, dn_valids], axis=1)  # (bs, num_cdn)
 
         if label_noise_ratio > 0:
-            # (sum(instance_i) * 2 * dn_number)
-            p = self.uniform_real(known_labels_expaned.shape)  # uniform(0,1)
-            # indice of lower p,
-            chosen_indice = ops.nonzero(p < (label_noise_ratio * 0.5)).view(
-                -1
-            )  # half of bbox prob
-            new_label = self.uniform_int(
-                chosen_indice.shape, Tensor(0, dtype=ms.int32), Tensor(num_classes, dtype=ms.int32)
-            )  # randomly put a new label_id here
-            # new_label = ops.cast(new_label, ms.int64)
-            ops.tensor_scatter_elements(known_labels_expaned, indices=chosen_indice, updates=new_label, axis=0)
-        single_padding = int(max(known_num))
+            p = self.uniform_real(known_labels.shape)
+            noise_mask = p < label_noise_ratio * 0.5
+            rand_labels = self.uniform_int(known_labels.shape, Tensor(0, ms.int32), Tensor(num_classes, ms.int32))
+            known_labels = ops.logical_not(noise_mask).astype(ms.int32) * known_labels \
+                           + noise_mask.astype(ms.int32) * rand_labels
 
-        # equal to original dn_number
-        pad_size = int(single_padding * 2 * dn_number)
-        # (dn_number_group, sum(instance))   sum(instance): total number of gt boxes in a batch
-        positive_idx = ms_np.tile(ops.arange(end=len(boxes), dtype=ms.int64).unsqueeze(0), (dn_number, 1))
-        # (dn_number, 1) -> (dn_number_group, sum(instance))
-        positive_idx += (ops.arange(end=dn_number, dtype=ms.int64) * len(boxes) * 2).unsqueeze(1)
-        positive_idx = positive_idx.flatten()
-        negative_idx = positive_idx + len(boxes)
         if box_noise_scale > 0:
-            known_bbox_ = ops.zeros_like(known_bboxs)
-            # left bottom and right top points of box
-            known_bbox_[:, :2] = known_bboxs[:, :2] - known_bboxs[:, 2:] / 2
-            known_bbox_[:, 2:] = known_bboxs[:, :2] + known_bboxs[:, 2:] / 2
+            known_box_xyxy = box_cxcywh_to_xyxy(known_boxes)
+            half_wh = ops.concat([known_boxes[..., 2:]/2, known_boxes[..., 2:]/2], axis=-1)
 
-            # copy of half wh
-            diff = ops.zeros_like(known_bboxs)
-            diff[:, :2] = known_bboxs[:, 2:] / 2
-            diff[:, 2:] = known_bboxs[:, 2:] / 2
+            rand_sign = ops.cast(self.uniform_int(known_boxes.shape, Tensor(0, ms.int32), Tensor(2, ms.int32)) * 2 - 1, ms.float32)
+            rand_part = self.uniform_real(known_boxes.shape)
 
-            # random 1 or -1
-            rand_sign = ops.cast((self.uniform_int(
-                known_bboxs.shape, Tensor(0, ms.int32), Tensor(2, ms.int32)) * 2.0 - 1.0), ms.float32)
-            rand_part = self.uniform_real(known_bboxs.shape)  # uniform(0,1)
-
-            # negative bbox has offset within (1, 2)*half_wh, positive has (0, 1)*half_wh
-            rand_part[negative_idx] += 1.0
+            rand_part[:, num_dn:] += 1  # for positive 0-1, for negative 1-2
             rand_part *= rand_sign
-            known_bbox_ = known_bbox_ + ops.mul(rand_part, diff) * box_noise_scale
-            known_bbox_ = ops.clip_by_value(known_bbox_, clip_value_min=0.0, clip_value_max=1.0)  # prevent out of image
+            known_box_xyxy = known_box_xyxy + ops.mul(rand_part,  half_wh) * box_noise_scale  # add noise to the rect corner point
+            known_box_xyxy = ops.clip_by_value(known_box_xyxy, clip_value_min=Tensor(0.0), clip_value_max=Tensor(1.0))
 
-            known_bbox_expand[:, :2] = (known_bbox_[:, :2] + known_bbox_[:, 2:]) / 2  # gaussion distribution
-            known_bbox_expand[:, 2:] = known_bbox_[:, 2:] - known_bbox_[:, :2]
+            known_boxes = box_xyxy_to_cxcywh(known_box_xyxy)
 
-        m = known_labels_expaned.long()
-        # (sum(instance_i) * 2 * dn_number, embed_dim)
-        input_label_embed = label_enc(m)
-        input_bbox_embed = inverse_sigmoid(known_bbox_expand)
 
-        padding_label = ms_np.zeros((pad_size, hidden_dim))
-        padding_bbox = ms_np.zeros((pad_size, 4))
+        input_label_embed = self.label_enc(known_labels)  # (bs, num_cdn)
+        input_box_embed = inverse_sigmoid(known_boxes)  # (bs, num_cdn, 4)
 
-        input_query_label = ms_np.tile(padding_label, (batch_size, 1, 1))
-        input_query_bbox = ms_np.tile(padding_bbox, (batch_size, 1, 1))
+        # attn mask, if True, means communication is blocked
+        attn_mask = ops.zeros((bs, num_cdn + num_query, num_cdn + num_query), ms.bool_)  # all false, means no mask
+        # match query cannot see gt query, left bottom gray part of the figure in the original paper
+        attn_mask[:, num_cdn:, :num_cdn] = True
 
-        map_known_indice = ops.Tensor([])
-        if len(known_num):
-            map_known_indice = ops.concat(
-                [ops.arange(end=num) for num in known_num]
-            )  # eg:[0,1,2, 0,1, 0,1,2,3]
-            # eg: [[0,1,2, 0,1, 0,1,2,3,    4,5,6, 4,5, 4,5,6,7,      8,9,10, 8,9, 8,9,10,11], ...] single_padding=4
-            map_known_indice = ops.concat(
-                [map_known_indice + single_padding * i for i in range(2 * dn_number)]
-            ).long()
-        if len(known_bid):
-            input_query_label[(known_bid.long(), map_known_indice)] = input_label_embed
-            input_query_bbox[(known_bid.long(), map_known_indice)] = input_bbox_embed
+        # gt query from different group cannot see each other
+        gt_query_coor = ops.stack(ops.meshgrid((ms_np.arange(num_dn), ms_np.arange(num_dn)), indexing='ij'), -1)  # (num_dn, num_dn, 2)
+        gt_query_coor = ms_np.tile(gt_query_coor.expand_dims(0), (bs, 1, 1, 1))  # (bs, num_dn, num_dn, 2)
+        div = ops.floor_div(gt_query_coor, num_valid_box[:, None, None, None]).astype(ms.float32).min(axis=3).astype(ms.int32)  # (bs, num_dn, num_dn)
+        left_top_coor = gt_query_coor - ops.expand_dims(div, -1) * num_valid_box[:, None, None, None]
+        gt_query_mask = left_top_coor.max(-1) >= num_valid_box[:, None, None]  # (bs, num_dn, num_dn)
+        dn_2d_invalid_mask = ops.logical_not(ops.logical_and(dn_valids[:, None, :], dn_valids[:, :, None]))  # (bs, num_dn, num_dn)
+        gt_query_mask = ops.logical_or(gt_query_mask, dn_2d_invalid_mask)  # set true for the padding area
 
-        tgt_size = pad_size + num_queries
-        attn_mask = ops.ones((tgt_size, tgt_size), ms.float32) < 0  # all false, means no mask
-        # match query cannot see gt query
-        attn_mask[pad_size:, :pad_size] = True  # left bottom gray part of the figure in the paper
-        # gt cannot see each other
-        for i in range(dn_number):
-            if i == 0:
-                attn_mask[
-                single_padding * 2 * i: single_padding * 2 * (i + 1),
-                single_padding * 2 * (i + 1): pad_size,
-                ] = True
-            if i == dn_number - 1:
-                attn_mask[single_padding * 2 * i: single_padding * 2 * (i + 1), : single_padding * i * 2] = True
-            else:
-                # gt queries after the i-th gt query
-                attn_mask[
-                single_padding * 2 * i: single_padding * 2 * (i + 1),
-                single_padding * 2 * (i + 1): pad_size,
-                ] = True
-                # # gt queries before the i-th gt query
-                attn_mask[
-                single_padding * 2 * i: single_padding * 2 * (i + 1), : single_padding * 2 * i
-                ] = True
+        temp = ops.concat([gt_query_mask, gt_query_mask], axis=1)  # (bs, num_cdn, num_dn)
+        temp = ops.concat([temp, temp], axis=2)  # (bs, num_cdn, num_cdn)
+        attn_mask[:, :num_cdn, :num_cdn] = temp
 
-        dn_meta = {
-            "single_padding": single_padding * 2,  # query num per group, p+n
-            "dn_num": dn_number,  # group num
-        }
-        # (bs, original dn_number * 2, embed_dim)
-        # (bs, original dn_number * 2, 4)
-        # (bs, original dn_number * 2, original dn_number * 2)
-        return input_query_label, input_query_bbox, attn_mask, dn_meta
-
-    def preprocess_image(self, batched_inputs):
-        images = batched_inputs['image']
-        img_masks = batched_inputs['mask']
-        gt_bboxes = batched_inputs['boxes']
-        gt_labels = batched_inputs['labels']
-        gt_masks = batched_inputs['valid']
-        return images, img_masks, gt_bboxes, gt_labels, gt_masks
-
-    def prepare_targets(self, gt_bboxes, gt_labels, gt_valids):
-        new_targets = []
-        bs = len(gt_labels)
-        for i in range(bs):
-            new_targets.append({"labels": ops.masked_select(gt_labels[i], gt_valids[i]),
-                                "boxes": ops.masked_select(gt_bboxes[i], gt_valids[i][:, None]).reshape(-1, 4)})
-
-        return new_targets
-
-    def _set_aux_loss(self, outputs_class, outputs_coord):
-        # this is a workaround to make torchscript happy, as torchscript
-        # doesn't support dictionary with non-homogeneous values, such
-        # as a dict having both a Tensor and a list.
-        return [
-            {"pred_logits": a, "pred_boxes": b}
-            for a, b in zip(outputs_class[:-1], outputs_coord[:-1])
-        ]
+        return input_label_embed, input_box_embed, attn_mask, dn_valids

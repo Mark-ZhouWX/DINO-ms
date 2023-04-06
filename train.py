@@ -30,7 +30,7 @@ if __name__ == '__main__':
     else:
         rank = 0
         device_num = 1
-        context.set_context(device_id=3)
+        context.set_context(device_id=4)
 
     # create dataset
     mindrecord_file = create_mindrecord(config, rank, "DETR.mindrecord", True)
@@ -93,7 +93,8 @@ if __name__ == '__main__':
     for e_id in range(epoch_num):
         for s_id, in_data in enumerate(dataset.create_dict_iterator()):
             # image, img_mask(1 for padl), gt_box, gt_label, gt_valid(True for valid)
-            input_data = in_data['image'], in_data['mask'], (in_data['labels'], in_data['boxes'], in_data['valid'])
+            input_data = in_data['image'], in_data['mask'], \
+                         (in_data['labels'], in_data['boxes'], in_data['valid'], in_data['dn_valid'])
             loss, _, _ = model(*input_data)
 
             # put on screen

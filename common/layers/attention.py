@@ -200,6 +200,8 @@ class MultiheadAttention(nn.Cell):
         if attn_mask is not None:
             if attn_mask.dtype != ms.bool_:
                 raise ValueError(f'attention mask type should be bool, but got {attn_mask.dtype} instead')
+            if attn_mask.ndim == 3: # (bs, num_query, num_key) -> (bs, 1, num_query, num_key)
+                attn_mask = attn_mask.expand_dims(1)
             attn_output_weights = ops.masked_fill(attn_output_weights, attn_mask, float("-inf"))
         if key_padding_mask is not None:
             if key_padding_mask.dtype != ms.bool_:

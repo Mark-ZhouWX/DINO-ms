@@ -13,6 +13,8 @@ val_data_type: 'val2017'
 output_dir: './work_dirs'
 num_parallel_workers: 8
 python_multiprocessing: False
+# hack implementation of dn
+num_dn: 100
 
 # Augment
 max_size: 960

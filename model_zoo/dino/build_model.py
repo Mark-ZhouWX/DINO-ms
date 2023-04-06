@@ -12,8 +12,8 @@ from model_zoo.dino.dn_criterion import DINOCriterion
 def build_dino(unit_test=False):
     num_classes = 80
     num_queries = 900
-    # dn_number = 0 if unit_test else 100
-    dn_number = 0
+    num_dn = 0 if unit_test else 100
+    # num_dn = 0
     # build model
     backbone = resnet50(
         in_channels=3,
@@ -85,6 +85,7 @@ def build_dino(unit_test=False):
         alpha=0.25,
         gamma=2.0,
         two_stage_binary_cls=False,
+        num_dn=num_dn,
     )
     dino = DINO(backbone,
                 position_embedding,
@@ -95,7 +96,7 @@ def build_dino(unit_test=False):
                 num_queries=num_queries,
                 aux_loss=True,
                 select_box_nums_for_evaluation=300,
-                dn_number=dn_number,
+                num_dn=num_dn,
                 label_noise_ratio=0.2,
                 box_noise_scale=1.0,
                 unit_test=unit_test,

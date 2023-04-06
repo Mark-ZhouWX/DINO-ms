@@ -83,7 +83,7 @@ class BaseTransformerLayer(nn.Cell):
         else:
             self.norms = norm
 
-    @ms.ms_function
+    # @ms.ms_function
     def construct(
         self,
         query: Tensor,

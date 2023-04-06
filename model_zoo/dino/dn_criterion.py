@@ -3,6 +3,7 @@ import mindspore.numpy as ms_np
 from mindspore import Tensor, ops
 
 from common.detr.criterion.set_criterion import SetCriterion
+from common.utils.misc import replace_invalid
 
 
 class TwoStageCriterion(SetCriterion):
@@ -47,7 +48,6 @@ class TwoStageCriterion(SetCriterion):
         outputs_auxiliary =  outputs[1]
         outputs_encoder = outputs[2]
         # Retrieve the matching between the outputs of the last layer and the targets
-        indices = self.matcher(outputs_last_encoder, targets)  # [(ind_src, ind_tgt)], len(indices)=bs
 
         # Compute all the requested losses
         base_loss_names = ['loss_class', 'loss_bbox', 'loss_giou']
@@ -55,7 +55,7 @@ class TwoStageCriterion(SetCriterion):
         loss_values = []
 
         # get 3 basic loss, label, bbox and giou
-        loss_last_decoder = self.get_loss(outputs_last_encoder, targets, indices)
+        loss_last_decoder = self.get_loss(outputs_last_encoder, self.get_matched_target(outputs_last_encoder, targets))
         loss_names.extend(base_loss_names)
         loss_values.extend(loss_last_decoder)
 
@@ -64,8 +64,7 @@ class TwoStageCriterion(SetCriterion):
             aux_len = len(outputs_auxiliary[0])
             for i in range(aux_len):
                 aux_out = (outputs_auxiliary[0][i], outputs_auxiliary[1][i])
-                aux_ind = self.matcher(aux_out, targets)
-                loss_aux = self.get_loss(aux_out, targets, aux_ind)
+                loss_aux = self.get_loss(aux_out, self.get_matched_target(outputs_last_encoder, targets))
                 loss_names.extend([k + f"_{i}" for k in base_loss_names])
                 loss_values.extend(loss_aux)
 
@@ -75,8 +74,7 @@ class TwoStageCriterion(SetCriterion):
                 # reset target label, 0 means object, 1-79 no object
                 for bt in targets:
                     bt["labels"] = ops.zeros_like(bt["labels"])
-            enc_ind = self.matcher(outputs_encoder, targets)
-            loss_enc = self.get_loss(outputs_encoder, targets, enc_ind)
+            loss_enc = self.get_loss(outputs_encoder, self.get_matched_target(outputs_last_encoder, targets))
             loss_names.extend([k + "_enc" for k in base_loss_names])
             loss_values.extend(loss_enc)
 
@@ -90,6 +88,22 @@ class DINOCriterion(TwoStageCriterion):
     1) two stage loss, including normal detr decoder loss and encoder proposal loss
     2) dn and its auxiliary loss
     """
+    def __init__(
+        self,
+        num_classes,
+        matcher,
+        weight_dict,
+        losses=["class", "boxes"],
+        eos_coef=None,
+        loss_class_type="focal_loss",
+        alpha: float = 0.25,
+        gamma: float = 2,
+        two_stage_binary_cls=False,
+        num_dn: float = 100,
+    ):
+        super(DINOCriterion, self).__init__(
+            num_classes, matcher, weight_dict, losses, eos_coef, loss_class_type, alpha, gamma, two_stage_binary_cls)
+        self.num_dn = num_dn
 
     def construct(self, outputs, targets, dn_metas=None):
         """This performs the loss computation.
@@ -101,19 +115,17 @@ class DINOCriterion(TwoStageCriterion):
         """
         # two_stage loss (tuple(Tensor)) with size 3 -> last, aux, encoder
         # each tensor contains three type of loss -> bbox, giou, class
-        loss_dict = self.compute_two_stage_loss(outputs, targets)
+        loss_dict = self.compute_two_stage_loss(outputs[:3], targets[:3])
 
         # Compute all the requested losses
-        outputs_auxiliary = outputs[1]
-        aux_num = len(outputs_auxiliary[0]) if outputs_auxiliary is not None else 0
-        dn_loss_dict = self.compute_dn_loss(dn_metas, targets, aux_num)
+        dn_loss_dict = self.compute_dn_loss(outputs[3:5], targets)
         loss_dict.update(dn_loss_dict)
 
         weighted_loss = self.compute_weighted_loss(loss_dict)
 
         return weighted_loss
 
-    def compute_dn_loss(self, dn_metas, targets, aux_num):
+    def compute_dn_loss(self, outputs, targets):
         """
         compute dn loss in criterion
         Args:
@@ -122,69 +134,71 @@ class DINOCriterion(TwoStageCriterion):
             targets (List[Dict]): list with length of batch_size,contains instances of one batch
             num_boxes: total number of boxes within a batch
         """
-        losses = {}
-        if dn_metas and "output_known_lbs_bboxes" in dn_metas:
-            output_known_lbs_bboxes, dn_num, single_padding = (
-                dn_metas["output_known_lbs_bboxes"],
-                dn_metas["dn_num"],
-                dn_metas["single_padding"],
-            )
-            dn_idx = []
-            for tgt in targets:
-                # positive box assigned index, negative use default no object class, and no box regression supervision
-                if len(tgt["labels"]) > 0:
-                    # eg [0, 1, 2]
-                    t = ops.arange(len(tgt["labels"]), dtype=ms.int64)
-                    # (dn_num, num_inst_i)
-                    t = ms_np.tile(t.unsqueeze(0), (dn_num, 1))
-                    tgt_idx = t.flatten()
-                    # (dn_num, 1) + (dn_num, num_inst_i) -> (dn_num, num_inst_i)
-                    output_idx = (ops.arange(dn_num, dtype=ms.int64) * single_padding).unsqueeze(1) + t
-                    output_idx = output_idx.flatten()
-                else:
-                    output_idx = tgt_idx = Tensor([], dtype=ms.int64)
+        last_decoder, auxiliary = outputs[0], outputs[1]
 
-                dn_idx.append((output_idx, tgt_idx))
-            l_dict = {}
-            for loss in self.losses:
-                kwargs = {}
-                if "labels" in loss:
-                    kwargs = {"log": False}
-                l_dict.update(
-                    self.get_loss(loss, output_known_lbs_bboxes, targets, dn_idx, num_boxes * dn_num, **kwargs)
-                )
+        # Compute all the requested losses
+        base_loss_names = ['loss_class_dn', 'loss_bbox_dn', 'loss_giou_dn']
+        loss_names = []
+        loss_values = []
 
-            l_dict = {k + "_dn": v for k, v in l_dict.items()}
-            losses.update(l_dict)
-        else:
-            losses["loss_bbox_dn"] = ops.Tensor(0.0)
-            losses["loss_giou_dn"] = ops.Tensor(0.0)
-            losses["loss_class_dn"] = ops.Tensor(0.0)
+        # get 3 basic loss, label, bbox and giou
+        if last_decoder is not None:
+            loss_last_decoder = self.get_loss(last_decoder, self.get_cdn_targets(last_decoder, targets))
+            loss_names.extend(base_loss_names)
+            loss_values.extend(loss_last_decoder)
 
-        for i in range(aux_num):  # num_decoder_layer - 1
-            # dn aux loss
-            l_dict = {}
-            if dn_metas and "output_known_lbs_bboxes" in dn_metas:
-                output_known_lbs_bboxes_aux = output_known_lbs_bboxes["aux_outputs"][i]
-                for loss in self.losses:  # loss is a str
-                    kwargs = {}
-                    if "labels" in loss:
-                        kwargs = {"log": False}
-                    l_dict.update(
-                        self.get_loss(
-                            loss,
-                            output_known_lbs_bboxes_aux,
-                            targets,
-                            dn_idx,
-                            num_boxes * dn_num,
-                            **kwargs,
-                        )
-                    )
-                l_dict = {k + f"_dn_{i}": v for k, v in l_dict.items()}
-            else:
-                l_dict["loss_bbox_dn"] = Tensor(0.0)
-                l_dict["loss_giou_dn"] = Tensor(0.0)
-                l_dict["loss_class_dn"] = Tensor(0.0)
-                l_dict = {k + f"_{i}": v for k, v in l_dict.items()}
-            losses.update(l_dict)
+        # auxiliary losses
+        if auxiliary is not None:
+            aux_len = len(auxiliary[0])
+            for i in range(aux_len):
+                aux_out = (auxiliary[0][i], auxiliary[1][i])
+                loss_aux = self.get_loss(aux_out, self.get_cdn_targets(aux_out, targets))
+                loss_names.extend([k + f"_{i}" for k in base_loss_names])
+                loss_values.extend(loss_aux)
+
+        losses = {k: v for k, v in zip(loss_names, loss_values)}
         return losses
+
+    @ms.ms_function
+    def get_cdn_targets(self, outputs, targets):
+        """
+        get contrastive de-noising targets, including classes amd boxes and their valid masks
+        Parameters:
+            outputs (Tuple[Tensor]): pred_logits and pred_boxes
+            targets (Tuple[Tensor]): raw target classes and boxes
+        Returns:
+            cdn_labels (Tensor[bs, num_cdn]): cdn target classes
+            cdn_boxes (Tensor[bs, num_cdn, 4]): cdn target boxes
+            cdn_valids (Tensor[bs, num_cdn]): valid mask of target matches
+        """
+        src_logits = outputs[0]
+        bs, num_query, _ = src_logits.shape
+        num_cdn = self.num_dn * 2
+        assert num_cdn == num_query
+
+        tgt_labels, tgt_boxes, tgt_valids = targets[:3]
+        bs, num_pad_box = tgt_labels.shape
+        tgt_labels = replace_invalid(tgt_labels, tgt_valids, self.num_classes)
+        num_valid_box = ops.reduce_sum(tgt_valids.astype(ms.float32), 1).astype(ms.int32)  # (bs)
+        dn_valids = targets[3]  # (bs, num_dn)
+        assert self.num_dn == dn_valids.shape[1]
+
+        src_ind = ms_np.tile(ops.expand_dims(ms_np.arange(self.num_dn), 0), (bs, 1))  # (bs, num_dn)
+        src_ind = replace_invalid(src_ind, dn_valids, num_cdn - 1)  # 012 345 789 199
+
+        tgt_ind = ops.expand_dims(ms_np.arange(self.num_dn), 0) % num_valid_box.expand_dims(1)  # (bs, num_dn)
+        tgt_ind = replace_invalid(tgt_ind, dn_valids, num_pad_box - 1)  # 012 012 012 99
+
+        cdn_labels = ms_np.full((bs, num_cdn), self.num_classes, dtype=ms.float32)
+        sorted_dl = ops.gather_elements(tgt_labels, dim=1, index=tgt_ind).astype(ms.float32)  # (bs, num_dn)
+        cdn_labels = ops.tensor_scatter_elements(cdn_labels, indices=src_ind, updates=sorted_dl, axis=1).astype(ms.int32)
+
+        cdn_boxes = ms_np.full((bs, num_cdn, 4), 0.0, dtype=ms.float32)
+        sorted_db = ops.gather_elements(tgt_boxes, dim=1, index=ms_np.tile(ops.expand_dims(tgt_ind, -1), (1, 1, 4)))
+        cdn_boxes = ops.tensor_scatter_elements(cdn_boxes, indices=ms_np.tile(ops.expand_dims(src_ind, -1), (1,1, 4)),
+                                                updates=sorted_db, axis=1)
+
+        # valid masks
+        cdn_valids = ops.concat([dn_valids, ops.zeros_like(dn_valids)], axis=1)  # (bs, num_cdn)
+
+        return cdn_labels, cdn_boxes, cdn_valids
