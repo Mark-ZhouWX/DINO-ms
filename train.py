@@ -16,7 +16,7 @@ from model_zoo.dino.build_model import build_dino
 
 if __name__ == '__main__':
     # set context, seed
-    context.set_context(mode=context.PYNATIVE_MODE, device_target='CPU' if is_windows else 'GPU',
+    context.set_context(mode=context.PYNATIVE_MODE, device_target='CPU' if is_windows else 'Ascend',
                         pynative_synchronize=False)
     set_seed(0)
 
@@ -44,7 +44,7 @@ if __name__ == '__main__':
 
     # load pretrained model, only load backbone
     dino = build_dino()
-    pretrain_dir = r"C:\02Data\models" if is_windows else '/data1/zhouwuxing/pretrained_model/'
+    pretrain_dir = r"C:\02Data\models" if is_windows else './pretrained_model/'
     pretrain_path = os.path.join(pretrain_dir, "dino_resnet50_backbone.ckpt")
     ms.load_checkpoint(pretrain_path, dino, specify_prefix='backbone')
     print(f'successfully load checkpoint from {pretrain_path}')

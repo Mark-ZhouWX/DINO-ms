@@ -212,7 +212,7 @@ if __name__ == "__main__":
         # grad_fn = value_and_grad(forward, grad_position=None, weights=weight)
         grad_fn = ops.GradOperation(get_by_list=True)(dino, ParameterTuple(weight))
 
-        show_grad_weight = False
+        show_grad_weight = True
         for k in range(10):
             loss = dino(*inputs)
             gradients = grad_fn(*inputs)

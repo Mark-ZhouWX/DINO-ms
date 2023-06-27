@@ -94,7 +94,9 @@ class DINOTransformer(nn.Cell):
             feat_flatten.append(feat)
             mask_flatten.append(mask)
         feat_flatten = ops.concat(feat_flatten, 1)
+        mask_flatten = [m.astype(ms.int32) for m in mask_flatten]   # will fail at 3rd step on Ascend ms2.0 pynative for unsupport dtype
         mask_flatten = ops.concat(mask_flatten, 1)
+        mask_flatten = mask_flatten.astype(ms.bool_)
         lvl_pos_embed_flatten = ops.concat(lvl_pos_embed_flatten, 1)
         spatial_shapes = Tensor(spatial_shapes, dtype=ms.int32)
         level_start_index = ops.concat((ops.zeros((1,), spatial_shapes.dtype),
@@ -235,7 +237,7 @@ class DINOTransformer(nn.Cell):
 
             scale = ops.concat([valid_w.expand_dims(-1), valid_h.expand_dims(-1)], 1).view(bs, 1, 1, 2)
             # (bs, h ,w, 2), normalized to valid range
-            grid = (grid.expand_dims(0).broadcast_to((bs, -1, -1, -1)) + 0.5) / scale
+            grid = (ops.tile(grid.expand_dims(0), (bs, 1, 1, 1)) + 0.5) / scale
             hw = ms_np.ones_like(grid) * 0.05 * (2.0 ** lvl)  # preset wh, larger wh for higher level
             proposal = ops.concat((grid, hw), -1).view(bs, -1, 4)  # (bs, hw, 4)
             proposals.append(proposal)
@@ -251,9 +253,9 @@ class DINOTransformer(nn.Cell):
         output_proposals = ops.log(output_proposals / (1 - output_proposals))  # unsigmoid
         # filter proposal in the padding area
         output_proposals = output_proposals.masked_fill(
-            memory_padding_mask.expand_dims(-1), float("inf")
+            memory_padding_mask.expand_dims(-1), 9e6
         )
-        output_proposals = output_proposals.masked_fill(~output_proposals_valid, float("inf"))
+        output_proposals = output_proposals.masked_fill(~output_proposals_valid, 9e6)
 
         # also mask memory in the filtered position
         output_memory = memory

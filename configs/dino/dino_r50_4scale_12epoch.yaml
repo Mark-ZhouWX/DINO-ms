@@ -5,8 +5,8 @@ batch_size: 2
 dataset_file: 'coco'
 #mindrecord_dir: C:\02Data\coco2017\MindRecord_COCO_detr
 #coco_path: C:\02Data\coco2017
-mindrecord_dir: /data1/coco2017/MindRecord_COCO_detr
-coco_path: /data1/coco2017/coco_ori/
+mindrecord_dir: /home/zhouwuxing/input/MindRecord_COCO_detr
+coco_path: /home/zhouwuxing/input/coco_yolo
 train_data_type: "train2017"
 val_data_type: 'val2017'
 output_dir: './work_dirs'
