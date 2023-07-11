@@ -7,7 +7,7 @@ mkdir device
 cp -r ./common ./configs ./model_zoo ./config.py ./eval.py ./train.py ./device
 cd ./device
 
-device_ids=4,5,6,7
+device_ids=0,1,2,3,4,5,6,7
 str_array=(${device_ids//,/ })
 device_num=${#str_array[@]}
 

@@ -235,7 +235,8 @@ class DINOTransformer(nn.Cell):
 
             scale = ops.concat([valid_w.expand_dims(-1), valid_h.expand_dims(-1)], 1).view(bs, 1, 1, 2)
             # (bs, h ,w, 2), normalized to valid range
-            grid = (grid.expand_dims(0).broadcast_to((bs, -1, -1, -1)) + 0.5) / scale
+            # grid = (grid.expand_dims(0).broadcast_to((bs, -1, -1, -1)) + 0.5) / scale
+            grid = (ops.tile(grid.expand_dims(0), (bs, 1, 1, 1)) + 0.5) / scale
             hw = ms_np.ones_like(grid) * 0.05 * (2.0 ** lvl)  # preset wh, larger wh for higher level
             proposal = ops.concat((grid, hw), -1).view(bs, -1, 4)  # (bs, hw, 4)
             proposals.append(proposal)
