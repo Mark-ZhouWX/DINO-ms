@@ -4,7 +4,7 @@ import cv2
 import mindspore as ms
 import numpy as np
 from mindspore import nn, ops, Tensor, value_and_grad
-from mindspore.amp import init_status, all_finite
+from mindspore.amp import all_finite
 
 from common.dataset.transform import get_size_with_aspect_ratio
 from common.detr.matcher.matcher import HungarianMatcher
@@ -16,7 +16,7 @@ from model_zoo.dino.build_model import build_dino
 
 def get_input():
     # test inference runtime
-    image_root = r"C:\02Data\demo\image" if is_windows else '/data1/zhouwuxing/demo/'
+    image_root = './dataset/demo/'
     image_path1 = os.path.join(image_root, 'hrnet_demo.jpg')
     image_path2 = os.path.join(image_root, 'road554.png')
     image_path3 = os.path.join(image_root, 'orange_71.jpg')
@@ -175,7 +175,7 @@ if __name__ == "__main__":
     train = True
     infer = False
 
-    pth_dir = r"C:\02Data\models" if is_windows else '/data1/zhouwuxing/pretrained_model/'
+    pth_dir = './pretrained_model/'
     pth_path = os.path.join(pth_dir, "dino_r50_4scale_12ep_49_2AP.pth")
     ms_pth_path = os.path.join(pth_dir, "ms_dino_r50_4scale_12ep_49_2AP.ckpt")
 
@@ -218,11 +218,12 @@ if __name__ == "__main__":
         grad_fn = value_and_grad(forward, grad_position=None, weights=weight)
 
         show_grad_weight = False
-        for k in range(1):
-            status = init_status()
+        for k in range(10):
+            # status = init_status()
             loss, gradients = grad_fn(*inputs)
-            is_finite = all_finite(gradients, status)
-            print(f'loss of the {k} step', loss, f'is_finite: {is_finite}')
+            # is_finite = all_finite(gradients, status)
+            # print(f'loss of the {k} step', loss, f'is_finite: {is_finite}')
+            print(f'loss of the {k} step', loss)
 
             if show_grad_weight:
                 for i, grad in enumerate(gradients):

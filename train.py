@@ -16,13 +16,13 @@ from model_zoo.dino.build_model import build_dino
 
 if __name__ == '__main__':
     # set context, seed
-    context.set_context(mode=context.PYNATIVE_MODE, device_target='CPU' if is_windows else 'GPU',
+    context.set_context(mode=context.PYNATIVE_MODE, device_target='GPU',
                         pynative_synchronize=False)
     set_seed(0)
 
     if config.distributed:
         print('distributed training start')
-        init(backend_name='nccl')
+        init()
         rank = get_rank()
         device_num = get_group_size()
         print(f'current rank {rank}/{device_num}')
@@ -32,6 +32,7 @@ if __name__ == '__main__':
     else:
         rank = 0
         device_num = 1
+    main_device = rank==0
 
     # create dataset
     mindrecord_file = create_mindrecord(config, rank, "DETR.mindrecord", True)
@@ -44,7 +45,7 @@ if __name__ == '__main__':
 
     # load pretrained model, only load backbone
     dino = build_dino()
-    pretrain_dir = r"C:\02Data\models" if is_windows else '/data1/zhouwuxing/pretrained_model/'
+    pretrain_dir = './pretrained_model/'
     pretrain_path = os.path.join(pretrain_dir, "dino_resnet50_backbone.ckpt")
     ms.load_checkpoint(pretrain_path, dino, specify_prefix='backbone')
     print(f'successfully load checkpoint from {pretrain_path}')
@@ -83,31 +84,39 @@ if __name__ == '__main__':
     # model = nn.TrainOneStepCell(dino, optimizer)
 
     # training loop
-    log_loss_step = 1
-    summary_loss_step = 1
-    start_time = datetime.now()
+    log_loss_step = 10
+    summary_loss_step = 10
+    start_time = last_log_time = datetime.now()
     writer = SummaryWriter(f'./work_dirs/tensor_log/{start_time.strftime("%Y_%m_%d_%H_%M_%S")}')
     for e_id in range(epoch_num):
         for s_id, in_data in enumerate(dataset.create_dict_iterator()):
+            global_s_id = s_id + e_id * ds_size
             # image, img_mask(1 for padl), gt_box, gt_label, gt_valid(True for valid)
             loss, _, _ = model(in_data['image'], in_data['mask'], in_data['boxes'], in_data['labels'], in_data['valid'])
 
             # put on screen
             now = datetime.now().strftime("%Y-%m-%d - %H:%M:%S")
             past_time = (datetime.now() - start_time)
-            if s_id % log_loss_step == 0:
-                print(f"[{now}] epoch[{e_id}/{epoch_num}] step[{s_id}/{ds_size}], "
-                      f"loss[{loss.asnumpy():.3f}], cost-time[{past_time.days}d {past_time}]")
+            if main_device:
+                if global_s_id % log_loss_step == 0:
+                    step_time = datatime.now() - last_log_time
+                    step_time_s = step_time.total_seconds() / log_loss_step
+                    past_time_min, past_time_sec = divmod(past_time.seconds, 60)
+                    past_time_hour, past_time_min = divmod(past_time_min, 60)
 
-            # record in summary for mindinsight
-            global_s_id = s_id + e_id * ds_size
-            if global_s_id % summary_loss_step == 0:
-                writer.add_scalar('loss', loss.asnumpy(), global_s_id)
+                    print(f"[{now}] epoch[{e_id+1}/{epoch_num}] step[{s_id}/{ds_size}], "
+                          f"loss[{loss.asnumpy():.2f}], cost-time[{past_time.days:02d}d {past_time_hour:02d}:{past_time_min:02d}:{past_time_sec:02d}],"
+                          f"step_time[{step_time_s:.1f}s]")
 
-        # save checkpoint every epoch
-        print(f'saving checkpoint for epoch {e_id}')
-        ckpt_path = os.path.join(config.output_dir, f'dino_epoch{e_id:03d}_rank{rank}.ckpt')
-        ms.save_checkpoint(dino, ckpt_path)
+                # record in summary for mindinsight
+
+                if global_s_id % summary_loss_step == 0:
+                    writer.add_scalar('loss', loss.asnumpy(), global_s_id)
+        if main_device:
+            # save checkpoint every epoch
+            print(f'saving checkpoint for epoch {e_id+1}')
+            ckpt_path = os.path.join(config.output_dir, f'dino_epoch{e_id+1:03d}_rank{rank}.ckpt')
+            ms.save_checkpoint(dino, ckpt_path)
 
     writer.close()
     print(f'finish training for dino')

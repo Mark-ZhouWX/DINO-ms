@@ -167,15 +167,16 @@ def evaluate_single(model):
 if __name__ == '__main__':
     # set context
     ms.set_context(mode=ms.PYNATIVE_MODE, device_target='CPU' if is_windows else 'GPU',
-                   pynative_synchronize=False, device_id=1)
+                   pynative_synchronize=False)
     rank = 0
     device_num = 1
     set_seed(0)
     eval_model = build_dino()
     eval_model.set_train(False)
 
-    pth_dir = r"C:\02Data\models" if is_windows else '/data1/zhouwuxing/pretrained_model/'
-    model_path = os.path.join(pth_dir, "ms_dino_r50_4scale_12ep_49_2AP.ckpt")
+    pth_dir = './work_dirs/'
+    model_path = os.path.join(pth_dir, "dino_epoch009_rank0.ckpt")
+    print(f'load model from {model_path}')
     ms.load_checkpoint(model_path, eval_model)
 
     evaluate_coco = True

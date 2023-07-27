@@ -16,7 +16,7 @@ def pad_as_batch(image_list: List[Tensor], pad_value=0.0, size_divisibility=0):
     c, h, w = image_list[0].shape
     image_sizes = [(im.shape[-2], im.shape[-1]) for im in image_list]
     image_sizes_tensor = [Tensor(x) for x in image_sizes]
-    max_size = ops.max(ops.stack(image_sizes_tensor), 0)[1]  # (2,)
+    max_size = ops.max(ops.stack(image_sizes_tensor), 0)[0]  # (2,)
 
     if size_divisibility > 1:
         stride = size_divisibility

@@ -182,7 +182,7 @@ class DINO(nn.Cell):
             features = self.backbone(images)
 
         else:  # test inference without backbone
-            npz_file = np.load('/data1/zhouwuxing/demo/resnet_fm.npz')
+            npz_file = np.load('./dataset/demo/resnet_fm.npz')
             features = dict()
             for k in npz_file.files:
                 features[k] = Tensor(npz_file[k], dtype=images.dtype)
@@ -294,10 +294,10 @@ class DINO(nn.Cell):
                 if k in weight_dict:
                     loss_dict[k] *= weight_dict[k]
             loss = sum(loss_dict.values())
-            if self.unit_test:
-                print(f'total loss', loss)
-                for k, v in loss_dict.items():
-                    print(k, v)
+            # if self.unit_test:
+            #     print(f'total loss', loss)
+            #     for k, v in loss_dict.items():
+            #         print(k, v)
             return loss
         else:
             return output
