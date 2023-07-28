@@ -169,7 +169,7 @@ def convert_input_format(batched_inputs):
 
 if __name__ == "__main__":
     # set context
-    ms.set_context(mode=ms.PYNATIVE_MODE, device_target='CPU' if is_windows else 'GPU',
+    ms.set_context(mode=ms.PYNATIVE_MODE, device_target='GPU',
                    pynative_synchronize=True, device_id=2)
 
     train = True

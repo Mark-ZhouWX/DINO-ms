@@ -1,4 +1,5 @@
 import os
+import time
 from datetime import datetime
 
 from mindspore.communication import init, get_rank, get_group_size
@@ -84,10 +85,11 @@ if __name__ == '__main__':
     # model = nn.TrainOneStepCell(dino, optimizer)
 
     # training loop
-    log_loss_step = 10
+    os.makedirs(config.output_dir, exist_ok=True)
+    log_loss_step = 20
     summary_loss_step = 10
     start_time = last_log_time = datetime.now()
-    writer = SummaryWriter(f'./work_dirs/tensor_log/{start_time.strftime("%Y_%m_%d_%H_%M_%S")}')
+    writer = SummaryWriter(os.path.join(config.output_dir, f'tf_log_{start_time.strftime("%Y_%m_%d_%H_%M_%S")}'))
     for e_id in range(epoch_num):
         for s_id, in_data in enumerate(dataset.create_dict_iterator()):
             global_s_id = s_id + e_id * ds_size
@@ -99,23 +101,30 @@ if __name__ == '__main__':
             past_time = (datetime.now() - start_time)
             if main_device:
                 if global_s_id % log_loss_step == 0:
-                    step_time = datatime.now() - last_log_time
+                    step_time = datetime.now() - last_log_time
                     step_time_s = step_time.total_seconds() / log_loss_step
+
                     past_time_min, past_time_sec = divmod(past_time.seconds, 60)
                     past_time_hour, past_time_min = divmod(past_time_min, 60)
 
+                    rema_step_time_s = (epoch_num * ds_size - global_s_id) * step_time_s
+                    rema_time_min, rema_time_sec = divmod(rema_step_time_s, 60)
+                    rema_time_hour, rema_time_min = divmod(rema_time_min, 60)
+                    rema_time_day, rema_time_hour = divmod(rema_time_hour, 24)
+
                     print(f"[{now}] epoch[{e_id+1}/{epoch_num}] step[{s_id}/{ds_size}], "
-                          f"loss[{loss.asnumpy():.2f}], cost-time[{past_time.days:02d}d {past_time_hour:02d}:{past_time_min:02d}:{past_time_sec:02d}],"
-                          f"step_time[{step_time_s:.1f}s]")
+                          f"loss[{loss.asnumpy():.2f}] "
+                          f"past-t[{past_time.days:02d}d {past_time_hour:02d}:{past_time_min:02d}:{past_time_sec:02d}] "
+                          f"rema-t[{rema_time_day:02d}d {rema_time_hour:02d}:{rema_time_min:02d}:{rema_time_sec:02d}] "
+                          f"step-t[{step_time_s:.1f}s]")
 
                 # record in summary for mindinsight
-
                 if global_s_id % summary_loss_step == 0:
                     writer.add_scalar('loss', loss.asnumpy(), global_s_id)
         if main_device:
             # save checkpoint every epoch
-            print(f'saving checkpoint for epoch {e_id+1}')
-            ckpt_path = os.path.join(config.output_dir, f'dino_epoch{e_id+1:03d}_rank{rank}.ckpt')
+            ckpt_path = os.path.join(config.output_dir, f'dino_epoch{e_id+1:03d}.ckpt')
+            print(f'saving checkpoint for epoch {e_id + 1} at {ckpt_path}')
             ms.save_checkpoint(dino, ckpt_path)
 
     writer.close()

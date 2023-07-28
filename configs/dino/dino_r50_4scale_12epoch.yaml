@@ -9,7 +9,7 @@ mindrecord_dir: ./dataset/coco2017/MindRecord_COCO_detr
 coco_path: ./dataset/coco2017/
 train_data_type: "train2017"
 val_data_type: 'val2017'
-output_dir: './work_dirs'
+output_dir: './work_dirs/exp1'
 num_parallel_workers: 8
 python_multiprocessing: False
 
