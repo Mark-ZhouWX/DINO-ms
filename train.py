@@ -108,7 +108,7 @@ if __name__ == '__main__':
                     past_time_hour, past_time_min = divmod(past_time_min, 60)
 
                     rema_step_time_s = (epoch_num * ds_size - global_s_id) * step_time_s
-                    rema_time_min, rema_time_sec = divmod(rema_step_time_s, 60)
+                    rema_time_min, rema_time_sec = divmod(int(rema_step_time_s), 60)
                     rema_time_hour, rema_time_min = divmod(rema_time_min, 60)
                     rema_time_day, rema_time_hour = divmod(rema_time_hour, 24)
 
@@ -117,10 +117,12 @@ if __name__ == '__main__':
                           f"past-t[{past_time.days:02d}d {past_time_hour:02d}:{past_time_min:02d}:{past_time_sec:02d}] "
                           f"rema-t[{rema_time_day:02d}d {rema_time_hour:02d}:{rema_time_min:02d}:{rema_time_sec:02d}] "
                           f"step-t[{step_time_s:.1f}s]")
+                    last_log_time = datetime.now()
 
                 # record in summary for mindinsight
                 if global_s_id % summary_loss_step == 0:
                     writer.add_scalar('loss', loss.asnumpy(), global_s_id)
+                    writer.flush()
         if main_device:
             # save checkpoint every epoch
             ckpt_path = os.path.join(config.output_dir, f'dino_epoch{e_id+1:03d}.ckpt')

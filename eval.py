@@ -86,7 +86,7 @@ def visualize(pred_dict: Dict, coco_gt: COCO, save_dir, raw_dir):
         cv2.imwrite(save_path, image)
 
 
-def coco_evaluate(model, eval_dateset, eval_anno_path, save_dir, raw_dir):
+def coco_evaluate(model, eval_dateset, eval_anno_path, save_dir, raw_dir, save_vis=False):
     # coco evaluator
     coco_gt = COCO(eval_anno_path)
     coco_evaluator = CocoEvaluator(coco_gt, ('bbox', ))
@@ -106,10 +106,8 @@ def coco_evaluate(model, eval_dateset, eval_anno_path, save_dir, raw_dir):
         res = [{'scores': s, 'labels': l, 'boxes': b} for s, l, b in zip(scores, cat_ids, boxes)]
         img_res = {int(idx): output for idx, output in zip(image_id, res)}
         coco_evaluator.update(img_res)
-        visualize(img_res, coco_gt, save_dir, raw_dir)
-        iii += 1
-        if False and iii > 3:
-            break
+        if save_vis:
+            visualize(img_res, coco_gt, save_dir, raw_dir)
 
     coco_evaluator.synchronize_between_processes()
     coco_evaluator.accumulate()
