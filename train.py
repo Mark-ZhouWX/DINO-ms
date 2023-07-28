@@ -114,8 +114,8 @@ if __name__ == '__main__':
 
                     print(f"[{now}] epoch[{e_id+1}/{epoch_num}] step[{s_id}/{ds_size}], "
                           f"loss[{loss.asnumpy():.2f}] "
-                          f"past-t[{past_time.days:02d}d {past_time_hour:02d}:{past_time_min:02d}:{past_time_sec:02d}] "
-                          f"rema-t[{rema_time_day:02d}d {rema_time_hour:02d}:{rema_time_min:02d}:{rema_time_sec:02d}] "
+                          f"past-t[{past_time.days:2d}d {past_time_hour:02d}:{past_time_min:02d}:{past_time_sec:02d}] "
+                          f"rema-t[{rema_time_day:2d}d {rema_time_hour:02d}:{rema_time_min:02d}:{rema_time_sec:02d}] "
                           f"step-t[{step_time_s:.1f}s]")
                     last_log_time = datetime.now()
 
