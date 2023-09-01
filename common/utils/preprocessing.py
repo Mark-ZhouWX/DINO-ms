@@ -23,7 +23,7 @@ def pad_as_batch(image_list: List[Tensor], pad_value=0.0, size_divisibility=0):
         max_size = (max_size + (stride - 1)).div(stride, rounding_mode="floor") * stride
 
     batch_shape = [bs, c, int(max_size[0]), int(max_size[1])]
-    batched_imgs = ms_np.full(batch_shape, pad_value)
+    batched_imgs = ops.full(batch_shape, pad_value)
     for i_bs, img in enumerate(image_list):
         batched_imgs[i_bs, ..., :image_sizes[i_bs][0], :image_sizes[i_bs][1]] = img
 

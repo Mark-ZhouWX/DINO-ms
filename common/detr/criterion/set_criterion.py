@@ -107,7 +107,7 @@ class SetCriterion(nn.Cell):
         # (sum_instance,) [3,4,   7,2,9]
         target_classes_o = ops.concat([t["labels"][J] for t, (_, J) in zip(targets, indices)])
         # (bs, num_query)  value=80
-        target_classes = ms_np.full((bs, num_query), self.num_classes, dtype=ms.int64)
+        target_classes = ops.full((bs, num_query), self.num_classes, dtype=ms.int64)
         target_classes[idx] = target_classes_o
 
         # Computation classification loss
@@ -170,7 +170,7 @@ class SetCriterion(nn.Cell):
     def _get_src_permutation_idx(self, indices):
         # permute predictions following indices
         # (sum_instance,) eg: [0,0,  1,1,1]
-        batch_idx = ops.concat([ms_np.full_like(src, i) for i, (src, _) in enumerate(indices)])
+        batch_idx = ops.concat([ops.full_like(src, i) for i, (src, _) in enumerate(indices)])
         # (sum_instance,) eg: [7,10, 3,6,8]
         src_idx = ops.concat([src for (src, _) in indices])
         return batch_idx, src_idx
