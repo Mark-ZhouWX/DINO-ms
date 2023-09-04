@@ -37,7 +37,7 @@ def select_from_prediction(box_cls, box_pred, num_select=300):
                              num_class, rounding_mode="floor").astype(ms.int32)
 
     labels = topk_indexes_full % num_class  # (bs, num_select)
-    boxes = ops.gather_elements(box_pred, 1, ms_np.tile(topk_boxes_ind.unsqueeze(-1), (1, 1, 4)))  # (bs,num_eval,4)
+    boxes = ops.gather_elements(box_pred, 1, ops.tile(topk_boxes_ind.unsqueeze(-1), (1, 1, 4)))  # (bs,num_eval,4)
 
     return scores, labels, boxes
 

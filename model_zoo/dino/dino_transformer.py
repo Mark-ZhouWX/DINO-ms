@@ -11,13 +11,6 @@ from common.layers.transformer import TransformerLayerSequence, BaseTransformerL
 from common.utils.misc import inverse_sigmoid
 
 
-def linspace(start: Tensor, end: Tensor, num):
-    num = int(num)
-    res = ops.zeros(num, start.dtype)
-    step = ops.div(end - start, num - 1)
-    for i in range(num):
-        res[i] = start + i * step
-    return res
 
 
 class DINOTransformer(nn.Cell):
@@ -147,7 +140,7 @@ class DINOTransformer(nn.Cell):
         topk_proposals = ops.topk(enc_outputs_class.max(-1), topk)[1]  # index (bs, k) , k=num_query
         # extract region proposal boxes
         topk_coords_unact = ops.gather_elements(
-            enc_outputs_coord_unact, 1, ms_np.tile(topk_proposals.unsqueeze(-1), (1, 1, 4)),
+            enc_outputs_coord_unact, 1, ops.tile(topk_proposals.unsqueeze(-1), (1, 1, 4)),
         )  # unsigmoided. (bs, k, 4)
         reference_points = ops.stop_gradient(topk_coords_unact).sigmoid()
         if query_embed[1] is not None:
@@ -157,11 +150,11 @@ class DINOTransformer(nn.Cell):
         # extract region features
 
         target_unact = ops.gather_elements(
-            output_memory, 1, ms_np.tile(topk_proposals.unsqueeze(-1), (1, 1, output_memory.shape[-1]))
+            output_memory, 1, ops.tile(topk_proposals.unsqueeze(-1), (1, 1, output_memory.shape[-1]))
         )
         if self.learnt_init_query:
             bs = multi_level_feats[0].shape[0]
-            target = ms_np.tile(self.tgt_embed.embedding_table[None], (bs, 1, 1))
+            target = ops.tile(self.tgt_embed.embedding_table[None], (bs, 1, 1))
         else:
             target = ops.stop_gradient(target_unact)
         if query_embed[0] is not None:
@@ -228,8 +221,8 @@ class DINOTransformer(nn.Cell):
             valid_w = w_mask_not.sum(1)  # (bs,)
 
             grid_y, grid_x = ops.meshgrid(
-                linspace(Tensor(0, dtype=ms.float32), Tensor(H - 1, dtype=ms.float32), H),
-                linspace(Tensor(0, dtype=ms.float32), Tensor(W - 1, dtype=ms.float32), W), indexing='ij')  # (h, w)
+                ops.linspace(Tensor(0, dtype=ms.float32), Tensor(H - 1, dtype=ms.float32), H),
+                ops.linspace(Tensor(0, dtype=ms.float32), Tensor(W - 1, dtype=ms.float32), W), indexing='ij')  # (h, w)
 
             grid = ops.concat([grid_x.expand_dims(-1), grid_y.expand_dims(-1)], -1)  # (h ,w, 2)
 
@@ -237,7 +230,7 @@ class DINOTransformer(nn.Cell):
             # (bs, h ,w, 2), normalized to valid range
             # grid = (grid.expand_dims(0).broadcast_to((bs, -1, -1, -1)) + 0.5) / scale
             grid = (ops.tile(grid.expand_dims(0), (bs, 1, 1, 1)) + 0.5) / scale
-            hw = ms_np.ones_like(grid) * 0.05 * (2.0 ** lvl)  # preset wh, larger wh for higher level
+            hw = ops.ones_like(grid) * 0.05 * (2.0 ** lvl)  # preset wh, larger wh for higher level
             proposal = ops.concat((grid, hw), -1).view(bs, -1, 4)  # (bs, hw, 4)
             proposals.append(proposal)
             _cur += H * W
@@ -281,9 +274,9 @@ class DINOTransformer(nn.Cell):
         for lvl, (H, W) in enumerate(spatial_shapes):
             #  TODO  check this 0.5
             ref_y, ref_x = ops.meshgrid(
-                linspace(Tensor(0.5, dtype=ms.float32),
+                ops.linspace(Tensor(0.5, dtype=ms.float32),
                          Tensor(H - 0.5, dtype=ms.float32), H),
-                linspace(Tensor(0.5, dtype=ms.float32),
+                ops.linspace(Tensor(0.5, dtype=ms.float32),
                          Tensor(W - 0.5, dtype=ms.float32), W),
                 indexing='ij'
             )  # (h, w)
@@ -451,7 +444,7 @@ class DINOTransformerDecoder(TransformerLayerSequence):
         output = query
         bs, num_queries, _ = output.shape
         if reference_points.dim() == 2:
-            reference_points = ms_np.tile(reference_points.unsqueeze(0), (bs, 1, 1))  # bs, num_query, 4
+            reference_points = ops.tile(reference_points.unsqueeze(0), (bs, 1, 1))  # bs, num_query, 4
 
         intermediate = []
         intermediate_reference_points = []

@@ -126,7 +126,7 @@ class DINOCriterion(TwoStageCriterion):
                     # eg [0, 1, 2]
                     t = ops.arange(len(tgt["labels"]), dtype=ms.int64)
                     # (dn_num, num_inst_i)
-                    t = ms_np.tile(t.unsqueeze(0), (dn_num, 1))
+                    t = ops.tile(t.unsqueeze(0), (dn_num, 1))
                     tgt_idx = t.flatten()
                     # (dn_num, 1) + (dn_num, num_inst_i) -> (dn_num, num_inst_i)
                     output_idx = (ops.arange(dn_num, dtype=ms.int64) * single_padding).unsqueeze(1) + t

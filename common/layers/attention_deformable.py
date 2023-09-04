@@ -78,7 +78,7 @@ class MultiScaleDeformableAttention(nn.Cell):
         self.sampling_offsets.weight.set_data(init.initializer('zeros', pshape, dtype))
         thetas = ops.arange(self.num_heads, dtype=ms.float32) * (2.0 * math.pi / self.num_heads)  # (num_head,)
         grid_init = ops.stack([ops.cos(thetas), ops.sin(thetas)], -1)  # (num_head, 2)
-        grid_init = ms_np.tile(
+        grid_init = ops.tile(
             # (num_head, 1) -> (8, 1) -> (num_head, 2)
             (grid_init / grid_init.abs().max(-1, keepdims=True)[0])
             .view(self.num_heads, 1, 1, 2)

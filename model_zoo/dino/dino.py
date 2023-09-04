@@ -347,7 +347,7 @@ class DINO(nn.Cell):
                                  num_class, rounding_mode="floor").astype(ms.int32)
 
         labels = topk_indexes_full % num_class  # (bs, eval_num)
-        boxes = ops.gather_elements(box_pred, 1, ms_np.tile(topk_boxes_ind.unsqueeze(-1), (1, 1, 4)))  # (bs,eval_num,4)
+        boxes = ops.gather_elements(box_pred, 1, ops.tile(topk_boxes_ind.unsqueeze(-1), (1, 1, 4)))  # (bs,eval_num,4)
 
         # For each box we assign the best class or the second best if the best on is `no_object`.
         # scores, labels = F.softmax(box_cls, dim=-1)[:, :, :-1].max(-1)
@@ -431,16 +431,16 @@ class DINO(nn.Cell):
         # flattened batch_id
         # [0,0,0, 1,1, 2,2,2,2]
         batch_idx = ops.concat(
-            [ms_np.full_like(t["labels"].long(), i) for i, t in enumerate(targets)]
+            [ops.full_like(t["labels"].long(), i) for i, t in enumerate(targets)]
         )
 
         # (sum(instance_i) * 2 * dn_number)
-        known_labels = ms_np.tile(labels, (2 * dn_number, 1)).view(-1)
+        known_labels = ops.tile(labels, (2 * dn_number, 1)).view(-1)
         # (sum(instance_i) * 2 * dn_number)
         # eg: [0,0,0, 1,1, 2,2,2,2,  0,0,0, 1,1, 2,2,2,2, ...]
-        known_bid = ms_np.tile(batch_idx, (2 * dn_number, 1)).view(-1)
+        known_bid = ops.tile(batch_idx, (2 * dn_number, 1)).view(-1)
         # (sum(instance_i)* 2 * dn_number, 4)
-        known_bboxs = ms_np.tile(boxes, (2 * dn_number, 1))
+        known_bboxs = ops.tile(boxes, (2 * dn_number, 1))
         known_labels_expaned = copy.deepcopy(known_labels)
         known_bbox_expand = copy.deepcopy(known_bboxs)
 
@@ -461,7 +461,7 @@ class DINO(nn.Cell):
         # equal to original dn_number
         pad_size = int(single_padding * 2 * dn_number)
         # (dn_number_group, sum(instance))   sum(instance): total number of gt boxes in a batch
-        positive_idx = ms_np.tile(ops.arange(end=len(boxes), dtype=ms.int64).unsqueeze(0), (dn_number, 1))
+        positive_idx = ops.tile(ops.arange(end=len(boxes), dtype=ms.int64).unsqueeze(0), (dn_number, 1))
         # (dn_number, 1) -> (dn_number_group, sum(instance))
         positive_idx += (ops.arange(end=dn_number, dtype=ms.int64) * len(boxes) * 2).unsqueeze(1)
         positive_idx = positive_idx.flatten()
@@ -496,11 +496,11 @@ class DINO(nn.Cell):
         input_label_embed = label_enc(m)
         input_bbox_embed = inverse_sigmoid(known_bbox_expand)
 
-        padding_label = ms_np.zeros((pad_size, hidden_dim))
-        padding_bbox = ms_np.zeros((pad_size, 4))
+        padding_label = ops.zeros((pad_size, hidden_dim))
+        padding_bbox = ops.zeros((pad_size, 4))
 
-        input_query_label = ms_np.tile(padding_label, (batch_size, 1, 1))
-        input_query_bbox = ms_np.tile(padding_bbox, (batch_size, 1, 1))
+        input_query_label = ops.tile(padding_label, (batch_size, 1, 1))
+        input_query_bbox = ops.tile(padding_bbox, (batch_size, 1, 1))
 
         map_known_indice = ops.Tensor([])
         if len(known_num):
