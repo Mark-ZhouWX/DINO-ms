@@ -190,10 +190,9 @@ def convert_parameter(i_pth_path, i_ms_pth_path, backbone_only=False):
     print(f'successfully load checkpoint into dino network')
 
     # compare transformer class and outer class
-    if backbone_only:
-        print(f'torch conv1', pt_param['backbone.stem.conv1.weight'][0, 0, 0, :5])
-        print(f'ms conv1', dino.backbone.conv1.weight[0, 0, 0, :5])
-    else:
+    print(f'torch conv1', pt_param['backbone.stem.conv1.weight'][0, 0, 0, :5])
+    print(f'ms conv1', dino.backbone.conv1.weight[0, 0, 0, :5])
+    if not backbone_only:
         l_id = 6
         print(f'torch trans class {l_id}', pt_param[f'transformer.decoder.class_embed.{l_id}.weight'][0, :5])
         print(f'torch class {l_id}', pt_param[f'class_embed.{l_id}.weight'][0, :5])
@@ -245,9 +244,9 @@ if __name__ == "__main__":
 
     pth_dir = './pretrained_model/'
     pth_path = os.path.join(pth_dir, "torch_resnet_backbone.pth")
-    ms_pth_path = os.path.join(pth_dir, "ms_torch_like_init.ckpt")
+    ms_pth_path = os.path.join(pth_dir, "test.ckpt")
 
-    convert_parameter(pth_path, ms_pth_path)
+    convert_parameter(pth_path, ms_pth_path, backbone_only=False)
     # che_res(pth_path, ms_pth_path)
 
 

@@ -6,7 +6,6 @@ import logging
 import os
 from functools import partial
 from typing import Optional, Type, List, Union, Dict
-import download
 
 from mindspore import nn, Tensor, load_checkpoint, load_param_into_net
 

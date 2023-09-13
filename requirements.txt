@@ -1,4 +1,5 @@
-mindspore>=1.7.0
 opencv-python
 pycocotools
 tqdm
+mindcv>=0.2.2
+scipy

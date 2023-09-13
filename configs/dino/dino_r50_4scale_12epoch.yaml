@@ -22,4 +22,5 @@ flip_ratio: 0.5
 distributed: False
 
 # model
+pretrain_model_path: './pretrained_model/dino_resnet_backbone-e295598d.ckpt'
 eval_model_path: ''

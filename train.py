@@ -1,17 +1,13 @@
 import os
-import time
 from datetime import datetime
 
 from mindspore.communication import init, get_rank, get_group_size
-from torch.utils.tensorboard import SummaryWriter
 
 import mindspore as ms
 from mindspore import nn, context, set_seed, ParallelMode
 
 from common.dataset.dataset import create_mindrecord, create_detr_dataset
-from common.detr.matcher.matcher import HungarianMatcher
 from common.engine import TrainOneStepWithGradClipLossScaleCell
-from common.utils.system import is_windows
 from config import config
 from model_zoo.dino.build_model import build_dino
 
@@ -46,10 +42,8 @@ if __name__ == '__main__':
 
     # load pretrained model, only load backbone
     dino = build_dino()
-    pretrain_dir = './pretrained_model/'
-    pretrain_path = os.path.join(pretrain_dir, "ms_torch_like_init.ckpt")
-    ms.load_checkpoint(pretrain_path, dino, specify_prefix='backbone')
-    print(f'successfully load checkpoint from {pretrain_path}')
+    ms.load_checkpoint(config.pretrain_model_path, dino, specify_prefix='backbone')
+    print(f'successfully load checkpoint from {config.pretrain_model_path}')
 
     epoch_num = 12
 
@@ -97,7 +91,6 @@ if __name__ == '__main__':
     log_loss_step = 20
     summary_loss_step = 10
     start_time = last_log_time = datetime.now()
-    writer = SummaryWriter(os.path.join(config.output_dir, f'tf_log_{start_time.strftime("%Y_%m_%d_%H_%M_%S")}'))
     for e_id in range(epoch_num):
         for s_id, in_data in enumerate(dataset.create_dict_iterator()):
             global_s_id = s_id + e_id * ds_size
@@ -127,10 +120,6 @@ if __name__ == '__main__':
                           f"step-t[{step_time_s:.1f}s]")
                     last_log_time = datetime.now()
 
-                # record in summary for mindinsight
-                if global_s_id % summary_loss_step == 0:
-                    writer.add_scalar('loss', loss.asnumpy(), global_s_id)
-                    writer.flush()
         if main_device:
             # save checkpoint every epoch
             ckpt_path = os.path.join(config.output_dir, f'dino_epoch{e_id+1:03d}.ckpt')
@@ -146,5 +135,4 @@ if __name__ == '__main__':
             ema.swap_after_eval()
             print(2, dino.transformer.decoder.class_embed[0].weight[0, :5])
 
-    writer.close()
     print(f'finish training for dino')
