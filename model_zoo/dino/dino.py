@@ -277,16 +277,6 @@ class DINO(nn.Cell):
         output["enc_outputs"] = {"pred_logits": interm_class, "pred_boxes": interm_coord}
 
         if self.training:
-            # visualize training samples
-            if self.vis_period > 0:
-                if self.vis_iter % self.vis_period == 0:
-                    box_cls = output["pred_logits"]
-                    box_pred = output["pred_boxes"]
-                    results = self.inference(box_cls, box_pred, images.image_sizes)
-                    self.visualize_training(batched_inputs, results)
-                self.vis_iter += 1
-
-            # TODO compute loss
             assert self.criterion is not None, "criterion should not be None at training"
             loss_dict = self.criterion(output, targets, dn_meta)
             weight_dict = self.criterion.weight_dict
@@ -301,19 +291,6 @@ class DINO(nn.Cell):
             return loss
         else:
             return output
-            # TODO output score bbox(normalized) and label
-            box_cls = output["pred_logits"]
-            box_pred = output["pred_boxes"]
-            results = self.inference(box_cls, box_pred, unpad_img_sizes)
-            processed_results = []
-            for results_per_image, input_per_image, image_size in zip(
-                    results, batched_inputs, unpad_img_sizes
-            ):
-                height = input_per_image.get("height", image_size[0])
-                width = input_per_image.get("width", image_size[1])
-                r = detector_postprocess(results_per_image, height, width)
-                processed_results.append({"instances": r})
-            return processed_results
 
     def inference(self, box_cls, box_pred, image_sizes):
         """

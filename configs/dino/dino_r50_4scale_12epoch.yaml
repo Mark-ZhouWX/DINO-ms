@@ -1,5 +1,7 @@
 # Training
 batch_size: 2
+lr: 0.0001
+weight_decay: 0.0001
 
 # Dataset parameters
 dataset_file: 'coco'
@@ -18,3 +20,6 @@ max_size: 960
 flip_ratio: 0.5
 
 distributed: False
+
+# model
+eval_model_path: ''

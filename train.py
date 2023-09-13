@@ -47,17 +47,19 @@ if __name__ == '__main__':
     # load pretrained model, only load backbone
     dino = build_dino()
     pretrain_dir = './pretrained_model/'
-    pretrain_path = os.path.join(pretrain_dir, "dino_resnet50_backbone.ckpt")
+    pretrain_path = os.path.join(pretrain_dir, "ms_torch_like_init.ckpt")
     ms.load_checkpoint(pretrain_path, dino, specify_prefix='backbone')
     print(f'successfully load checkpoint from {pretrain_path}')
 
     epoch_num = 12
 
     # create optimizer
-    lr = 1e-4  # normal learning rate
+    lr = config.lr  # normal learning rate
+    print(f'learning rate {lr}')
     lr_backbone = 1e-5  # slower learning rate for pretrained backbone
     lr_drop = epoch_num - 1
-    weight_decay = 1e-4
+    weight_decay = config.weight_decay
+    print(f'weight decay {weight_decay}')
     lr_not_backbone = nn.piecewise_constant_lr(
         [ds_size * lr_drop, ds_size * epoch_num], [lr, lr * 0.1])
     lr_backbone = nn.piecewise_constant_lr(
@@ -69,7 +71,10 @@ if __name__ == '__main__':
         {'params': backbone_params, 'lr': lr_backbone, 'weight_decay': weight_decay},
         {'params': not_backbone_params, 'lr': lr_not_backbone, 'weight_decay': weight_decay}
     ]
-    optimizer = nn.AdamWeightDecay(param_dicts)
+    # optimizer = nn.AdamWeightDecay(param_dicts)
+    import mindcv
+    print(f'using adamw from mindcv')
+    optimizer = mindcv.optim.adamw.AdamW(param_dicts)
 
     # # set mix precision
     # dino.to_float(ms.float16)
@@ -78,9 +83,12 @@ if __name__ == '__main__':
     #         cell.to_float(ms.float32)
 
     # create model with loss scale
+    from common.ema import EMA
+    ema = EMA(dino)
+
     dino.set_train(True)
     scale_sense = nn.DynamicLossScaleUpdateCell(loss_scale_value=2 ** 12, scale_factor=2, scale_window=1000)
-    model = TrainOneStepWithGradClipLossScaleCell(dino, optimizer, scale_sense, grad_clip=True, clip_value=0.1)
+    model = TrainOneStepWithGradClipLossScaleCell(dino, optimizer, scale_sense, grad_clip=True, clip_value=0.1, ema=ema)
     # model = nn.TrainOneStepWithLossScaleCell(dino, optimizer, scale_sense)
     # model = nn.TrainOneStepCell(dino, optimizer)
 
@@ -128,6 +136,15 @@ if __name__ == '__main__':
             ckpt_path = os.path.join(config.output_dir, f'dino_epoch{e_id+1:03d}.ckpt')
             print(f'saving checkpoint for epoch {e_id + 1} at {ckpt_path}')
             ms.save_checkpoint(dino, ckpt_path)
+
+            print(0, dino.transformer.decoder.class_embed[0].weight[0, :5])
+            ema_ckpt_path = os.path.join(config.output_dir, f'ema_dino_epoch{e_id+1:03d}.ckpt')
+            ema.swap_before_eval()
+            print(1, dino.transformer.decoder.class_embed[0].weight[0, :5])
+            ms.save_checkpoint(dino, ema_ckpt_path)
+            print(f'saving ema checkpoint for epoch {e_id + 1} at {ema_ckpt_path}')
+            ema.swap_after_eval()
+            print(2, dino.transformer.decoder.class_embed[0].weight[0, :5])
 
     writer.close()
     print(f'finish training for dino')

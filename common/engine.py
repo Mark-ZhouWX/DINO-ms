@@ -22,12 +22,15 @@ class TrainOneStepWithGradClipLossScaleCell(nn.TrainOneStepWithLossScaleCell):
         grad_clip (bool): Whether clip gradients. Default value is False.
     """
 
-    def __init__(self, network, optimizer, scale_sense=1, grad_clip=False, clip_value=0.1):
+    def __init__(self, network, optimizer, scale_sense=1, grad_clip=False, clip_value=0.1, ema=None):
         if isinstance(scale_sense, (int, float)):
             scale_sense = nn.FixedLossScaleUpdateCell(scale_sense)
         super(TrainOneStepWithGradClipLossScaleCell, self).__init__(network, optimizer, scale_sense)
         self.grad_clip = grad_clip
         self.grad_clip_value = clip_value
+        self.ema = ema
+        ema_not_none = ema is not None
+        print(f'ema_not_none {ema_not_none}')
 
     def construct(self, *inputs):
         weights = self.weights
@@ -52,4 +55,7 @@ class TrainOneStepWithGradClipLossScaleCell(nn.TrainOneStepWithLossScaleCell):
 
         if not overflow:
             self.optimizer(grads)
+            if self.ema is not None:
+                self.ema.ema_update()
+
         return loss, cond, scaling_sens

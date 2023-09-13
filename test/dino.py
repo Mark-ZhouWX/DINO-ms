@@ -212,8 +212,11 @@ if __name__ == "__main__":
             return loss_value
 
         weight = dino.trainable_params()
-        optimizer = nn.SGD(weight, learning_rate=1e-3)
+        # optimizer = nn.SGD(weight, learning_rate=1e-3)
         # optimizer = nn.AdamWeightDecay(weight, learning_rate=1e-3, beta1=0.9, beta2=0.999, eps=1e-6, weight_decay=1e-4)
+        import mindcv
+        print(f'using mindcv adam')
+        optimizer = mindcv.optim.adamw.AdamW(weight, learning_rate=1e-3, beta1=0.9, beta2=0.999, eps=1e-6, weight_decay=1e-4)
 
         grad_fn = value_and_grad(forward, grad_position=None, weights=weight)
 

@@ -172,10 +172,8 @@ if __name__ == '__main__':
     eval_model = build_dino()
     eval_model.set_train(False)
 
-    pth_dir = './work_dirs/'
-    model_path = os.path.join(pth_dir, "dino_epoch009_rank0.ckpt")
-    print(f'load model from {model_path}')
-    ms.load_checkpoint(model_path, eval_model)
+    print(f'load model from {config.eval_model_path}')
+    ms.load_checkpoint(config.eval_model_path, eval_model)
 
     evaluate_coco = True
     if evaluate_coco:

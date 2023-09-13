@@ -4,13 +4,11 @@ import re
 
 import cv2
 import mindspore
-import numpy as np
 import torch
-import platform
 
-from test import is_windows
-from test.dino import dino, inputs
+from test.dino import build_dino, convert_input_format, get_input
 
+dino = build_dino()
 
 # 通过PyTorch参数文件，打印PyTorch的参数文件里所有参数的参数名和shape，返回参数字典
 def pytorch_params(pth_file, verbose=False):
@@ -158,9 +156,11 @@ def mapper(ms_name: str):
     return ms_name
 
 
-def map_torch_to_mindspore(ms_dict, torch_dict, verbose=False):
+def map_torch_to_mindspore(ms_dict, torch_dict, verbose=False, backbone_only=False):
     new_params_list = []
     for name, value in ms_dict.items():
+        if backbone_only and not name.startswith('backbone.'):
+            continue
         torch_name = mapper(name)
         torch_value = torch_dict[mapper(name)]
 
@@ -178,11 +178,11 @@ def map_torch_to_mindspore(ms_dict, torch_dict, verbose=False):
     return new_params_list
 
 
-def convert_parameter(i_pth_path, i_ms_pth_path):
+def convert_parameter(i_pth_path, i_ms_pth_path, backbone_only=False):
     pt_param = pytorch_params(i_pth_path)
     # print('\n'*5)
     ms_param = mindspore_params(dino)
-    ms_params_list = map_torch_to_mindspore(ms_param, pt_param, verbose=False)
+    ms_params_list = map_torch_to_mindspore(ms_param, pt_param, verbose=False, backbone_only=backbone_only)
 
     print(f'successfully convert the checkpoint, saved as {i_ms_pth_path}')
     mindspore.save_checkpoint(ms_params_list, i_ms_pth_path)
@@ -190,12 +190,16 @@ def convert_parameter(i_pth_path, i_ms_pth_path):
     print(f'successfully load checkpoint into dino network')
 
     # compare transformer class and outer class
-    l_id = 6
-    print(f'torch trans class {l_id}', pt_param[f'transformer.decoder.class_embed.{l_id}.weight'][0, :5])
-    print(f'torch class {l_id}', pt_param[f'class_embed.{l_id}.weight'][0, :5])
+    if backbone_only:
+        print(f'torch conv1', pt_param['backbone.stem.conv1.weight'][0, 0, 0, :5])
+        print(f'ms conv1', dino.backbone.conv1.weight[0, 0, 0, :5])
+    else:
+        l_id = 6
+        print(f'torch trans class {l_id}', pt_param[f'transformer.decoder.class_embed.{l_id}.weight'][0, :5])
+        print(f'torch class {l_id}', pt_param[f'class_embed.{l_id}.weight'][0, :5])
 
-    print(f'ms trans class 0', dino.transformer.decoder.class_embed[l_id].weight[0, :5])
-    print(f'ms class', dino.class_embed[l_id].weight[0, :5])
+        print(f'ms trans class 0', dino.transformer.decoder.class_embed[l_id].weight[0, :5])
+        print(f'ms class', dino.class_embed[l_id].weight[0, :5])
 
 
 def che_res(in_pth_path, in_ms_pth_path):
@@ -216,6 +220,9 @@ def che_res(in_pth_path, in_ms_pth_path):
     print(f'ms trans class 0', dino.transformer.decoder.class_embed[l_id].weight[0, :5])
     print(f'ms class', dino.class_embed[l_id].weight[0, :5])
 
+    inputs, _ = get_input()
+    images, img_masks, gt_classes_list, gt_boxes_list, gt_valids_list = convert_input_format(inputs)
+    inputs = images, img_masks, gt_boxes_list, gt_classes_list, gt_valids_list
     infer_result = dino(inputs)
     print('\n'*3, 'infer result')
     print('scores', infer_result[0]['instances']['scores'][:5])
@@ -236,11 +243,11 @@ def che_res(in_pth_path, in_ms_pth_path):
 
 if __name__ == "__main__":
 
-    pth_dir = r"C:\02Data\models" if is_windows else '/data1/zhouwuxing/pretrained_model/'
-    pth_path = os.path.join(pth_dir, "dino_r50_4scale_12ep_49_2AP.pth")
-    ms_pth_path = os.path.join(pth_dir, "ms_dino_r50_4scale_12ep_49_2AP.ckpt")
+    pth_dir = './pretrained_model/'
+    pth_path = os.path.join(pth_dir, "torch_resnet_backbone.pth")
+    ms_pth_path = os.path.join(pth_dir, "ms_torch_like_init.ckpt")
 
-    # convert_parameter(pth_path, ms_pth_path)
-    che_res(pth_path, ms_pth_path)
+    convert_parameter(pth_path, ms_pth_path)
+    # che_res(pth_path, ms_pth_path)
 
 
