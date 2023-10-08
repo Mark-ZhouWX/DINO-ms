@@ -1,6 +1,7 @@
 import os
 from datetime import datetime
 
+import numpy as np
 from mindspore.communication import init, get_rank, get_group_size
 
 import mindspore as ms
@@ -42,7 +43,7 @@ if __name__ == '__main__':
 
     # load pretrained model, only load backbone
     dino = build_dino()
-    ms.load_checkpoint(config.pretrain_model_path, dino, specify_prefix='backbone')
+    ms.load_checkpoint(config.pretrain_model_path, dino)
     print(f'successfully load checkpoint from {config.pretrain_model_path}')
 
     epoch_num = 12
@@ -91,17 +92,20 @@ if __name__ == '__main__':
     log_loss_step = 20
     summary_loss_step = 10
     start_time = last_log_time = datetime.now()
+    loss_window = []
     for e_id in range(epoch_num):
         for s_id, in_data in enumerate(dataset.create_dict_iterator()):
-            global_s_id = s_id + e_id * ds_size
+            global_s_id = s_id + e_id * ds_size + 1
             # image, img_mask(1 for padl), gt_box, gt_label, gt_valid(True for valid)
             loss, _, _ = model(in_data['image'], in_data['mask'], in_data['boxes'], in_data['labels'], in_data['valid'])
-
+            loss_window.append(loss.asnumpy())
             # put on screen
             now = datetime.now().strftime("%Y-%m-%d - %H:%M:%S")
             past_time = (datetime.now() - start_time)
             if main_device:
                 if global_s_id % log_loss_step == 0:
+                    smooth_loss = np.median(loss_window)
+                    loss_window = []
                     step_time = datetime.now() - last_log_time
                     step_time_s = step_time.total_seconds() / log_loss_step
 
@@ -115,6 +119,7 @@ if __name__ == '__main__':
 
                     print(f"[{now}] epoch[{e_id+1}/{epoch_num}] step[{s_id}/{ds_size}], "
                           f"loss[{loss.asnumpy():.2f}] "
+                          f"smooth_loss[{smooth_loss:.2f}] "
                           f"past-t[{past_time.days:2d}d {past_time_hour:02d}:{past_time_min:02d}:{past_time_sec:02d}] "
                           f"rema-t[{rema_time_day:2d}d {rema_time_hour:02d}:{rema_time_min:02d}:{rema_time_sec:02d}] "
                           f"step-t[{step_time_s:.1f}s]")
