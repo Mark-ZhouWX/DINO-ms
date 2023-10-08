@@ -281,8 +281,7 @@ class DINO(nn.Cell):
             loss_dict = self.criterion(output, targets, dn_meta)
             weight_dict = self.criterion.weight_dict
             for k in loss_dict.keys():
-                if k in weight_dict:
-                    loss_dict[k] *= weight_dict[k]
+                loss_dict[k] *= weight_dict[k]
             loss = sum(loss_dict.values())
             # if self.unit_test:
             #     print(f'total loss', loss)
