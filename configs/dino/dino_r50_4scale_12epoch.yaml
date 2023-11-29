@@ -5,8 +5,8 @@ batch_size: 2
 dataset_file: 'coco'
 #mindrecord_dir: C:\02Data\coco2017\MindRecord_COCO_detr
 #coco_path: C:\02Data\coco2017
-mindrecord_dir: /home/zhouwuxing/input/MindRecord_COCO_detr
-coco_path: /home/zhouwuxing/input/coco_yolo
+mindrecord_dir: ./data/MindRecord_COCO_detr
+coco_path: ./data/coco_yolo
 train_data_type: "train2017"
 val_data_type: 'val2017'
 output_dir: './work_dirs'
@@ -18,3 +18,5 @@ max_size: 960
 flip_ratio: 0.5
 
 distributed: False
+pretrain_model_path: ./pretrained_model/ms_dino_r50_4scale_12ep_49_2AP.ckpt
+eval_model_path: ./pretrained_model/ms_dino_r50_4scale_12ep_49_2AP.ckpt

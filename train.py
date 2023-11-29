@@ -2,7 +2,6 @@ import os
 from datetime import datetime
 
 from mindspore.communication import init, get_rank, get_group_size
-from torch.utils.tensorboard import SummaryWriter
 
 import mindspore as ms
 from mindspore import nn, context, set_seed, ParallelMode
@@ -16,8 +15,7 @@ from model_zoo.dino.build_model import build_dino
 
 if __name__ == '__main__':
     # set context, seed
-    context.set_context(mode=context.PYNATIVE_MODE, device_target='CPU' if is_windows else 'Ascend',
-                        pynative_synchronize=False)
+    context.set_context(mode=context.PYNATIVE_MODE, device_target='Ascend', pynative_synchronize=True)
     set_seed(0)
 
     if config.distributed:
@@ -44,10 +42,8 @@ if __name__ == '__main__':
 
     # load pretrained model, only load backbone
     dino = build_dino()
-    pretrain_dir = r"C:\02Data\models" if is_windows else './pretrained_model/'
-    pretrain_path = os.path.join(pretrain_dir, "dino_resnet50_backbone.ckpt")
-    ms.load_checkpoint(pretrain_path, dino, specify_prefix='backbone')
-    print(f'successfully load checkpoint from {pretrain_path}')
+    ms.load_checkpoint(config.pretrain_model_path, dino)
+    print(f'successfully load checkpoint from {config.pretrain_model_path}')
 
     epoch_num = 12
 
@@ -86,7 +82,6 @@ if __name__ == '__main__':
     log_loss_step = 1
     summary_loss_step = 1
     start_time = datetime.now()
-    writer = SummaryWriter(f'./work_dirs/tensor_log/{start_time.strftime("%Y_%m_%d_%H_%M_%S")}')
     for e_id in range(epoch_num):
         for s_id, in_data in enumerate(dataset.create_dict_iterator()):
             # image, img_mask(1 for padl), gt_box, gt_label, gt_valid(True for valid)
@@ -101,13 +96,10 @@ if __name__ == '__main__':
 
             # record in summary for mindinsight
             global_s_id = s_id + e_id * ds_size
-            if global_s_id % summary_loss_step == 0:
-                writer.add_scalar('loss', loss.asnumpy(), global_s_id)
 
         # save checkpoint every epoch
         print(f'saving checkpoint for epoch {e_id}')
         ckpt_path = os.path.join(config.output_dir, f'dino_epoch{e_id:03d}_rank{rank}.ckpt')
         ms.save_checkpoint(dino, ckpt_path)
 
-    writer.close()
     print(f'finish training for dino')
